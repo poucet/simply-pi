@@ -324,8 +324,10 @@ Toggle with `/agents orchestrate off|nudge|strict` (persisted).
 
 The guidance text itself lives in `orchestrator.md` next to the code, re-read every
 turn so edits apply immediately. One file in `~/.pi/agent/` shapes what is
-injected — `subagents-orchestrator.md`, also re-read every turn. Its non-empty
-content is **prepended** to the bundled guidance, joined with a blank line:
+injected — `orchestrator.md` there too: the same concept in two homes, the user
+copy in the agent directory naming the role this parent plays, the bundled copy
+next to the code carrying the mechanics. The user copy, also re-read every
+turn, is **prepended** to the bundled guidance, joined with a blank line:
 your identity and delegation judgment first, the framework mechanics (stall
 response, reaping, anti-double-work) always after — current with the code, never
 copied, never drifting.
@@ -337,7 +339,7 @@ about collisions and assumptions to verify"). Absent or whitespace-only, it
 contributes nothing and the bundled prompt is used as-is.
 
 ```markdown
-<!-- ~/.pi/agent/subagents-orchestrator.md -->
+<!-- ~/.pi/agent/orchestrator.md -->
 You are the patchbay. Brief every lane with: the fence, the assumptions to
 verify, and the sibling lanes it may collide with.
 ```

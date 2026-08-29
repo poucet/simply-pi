@@ -8,7 +8,7 @@
  * read from the tree rather than restated here, so these assertions cannot
  * drift when the guidance text is edited.
  *
- * Composition: `~/.pi/agent/subagents-orchestrator.md`, when non-empty, is
+ * Composition: `~/.pi/agent/orchestrator.md`, when non-empty, is
  * **prepended** to the bundled prompt — user identity first, framework
  * mechanics always after, joined by a single blank line.
  */
@@ -78,7 +78,7 @@ test("with no user file the bundled prompt is injected verbatim", async () => {
 });
 
 test("a non-empty user file is prepended to the bundled prompt", async () => {
-	const h = withAgentFiles({ "subagents-orchestrator.md": "you are patchbay; brief lanes with collisions" });
+	const h = withAgentFiles({ "orchestrator.md": "you are patchbay; brief lanes with collisions" });
 	try {
 		assert.equal(await h.guidance(), `you are patchbay; brief lanes with collisions\n\n${bundled}`);
 	} finally {
@@ -87,7 +87,7 @@ test("a non-empty user file is prepended to the bundled prompt", async () => {
 });
 
 test("an absent or whitespace-only user file contributes nothing", async () => {
-	const h = withAgentFiles({ "subagents-orchestrator.md": " \n\t\n" });
+	const h = withAgentFiles({ "orchestrator.md": " \n\t\n" });
 	try {
 		assert.equal(await h.guidance(), bundled);
 	} finally {
@@ -98,7 +98,7 @@ test("an absent or whitespace-only user file contributes nothing", async () => {
 test("the pieces are joined by exactly one blank line, however the file ends", async () => {
 	// The user file carries trailing whitespace, so a naive concat would double
 	// the separator; the join must trim each piece first.
-	const h = withAgentFiles({ "subagents-orchestrator.md": "identity\n\n  \n" });
+	const h = withAgentFiles({ "orchestrator.md": "identity\n\n  \n" });
 	try {
 		const guidance = await h.guidance();
 		assert.equal(guidance, `identity\n\n${bundled}`);
@@ -109,10 +109,10 @@ test("the pieces are joined by exactly one blank line, however the file ends", a
 });
 
 test("the user file is re-read on each turn, so edits apply without a reload", async () => {
-	const h = withAgentFiles({ "subagents-orchestrator.md": "first identity" });
+	const h = withAgentFiles({ "orchestrator.md": "first identity" });
 	try {
 		assert.equal(await h.guidance(), `first identity\n\n${bundled}`);
-		writeFileSync(join(h.dir, "subagents-orchestrator.md"), "second identity");
+		writeFileSync(join(h.dir, "orchestrator.md"), "second identity");
 		assert.equal(await h.guidance(), `second identity\n\n${bundled}`);
 	} finally {
 		h.restore();

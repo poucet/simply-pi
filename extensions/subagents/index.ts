@@ -249,13 +249,15 @@ function saveSettings(settings: SubagentsSettings): void {
  * edited without touching code. One user file shapes what is injected, re-read on
  * every turn so edits apply without a reload:
  *
- *   - `~/.pi/agent/subagents-orchestrator.md` — its non-empty content is
- *     **prepended** to the bundled prompt, joined with a blank line.
+ *   - `~/.pi/agent/orchestrator.md` — its non-empty content is **prepended**
+ *     to the bundled prompt, joined with a blank line.
  *
  * The user file is the identity and judgment layer ("you are patchbay; never run
  * scribe and integrator together"); the bundled mechanics (stall response, reaping,
  * anti-double-work) follow it automatically — always current with the code, never
- * duplicated, never drifting. An absent or whitespace-only file contributes
+ * duplicated, never drifting. Two homes, one concept: the user's `orchestrator.md`
+ * in the agent directory names the role this parent plays; the bundled one next to
+ * the code carries the mechanics. An absent or whitespace-only user file contributes
  * nothing, and the result is then exactly the bundled prompt (or empty, if even
  * that is missing).
  */
@@ -275,7 +277,7 @@ function orchestratorPrompt(): string {
 	// The user file is the identity layer, prepended; the bundled mechanics
 	// always follow it, so they stay current without the user copying anything.
 	return [
-		readPromptFile(join(dir, "subagents-orchestrator.md")),
+		readPromptFile(join(dir, "orchestrator.md")),
 		readPromptFile(BUNDLED_ORCHESTRATOR_PROMPT),
 	]
 		.filter((piece) => piece !== "")

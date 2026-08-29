@@ -9,7 +9,7 @@ format is stated once in SYSTEM.md §2.
 
 The three-file overlay design (wholesale + `-head.md` + `-tail.md`) is gone;
 the head name was procedural, it was long, and it leaked the `orchestrator.md`
-naming detail. One file now: `~/.pi/agent/subagents-orchestrator.md`, whose
+naming detail. One file now: `~/.pi/agent/orchestrator.md`, whose
 non-empty content is **prepended** to the bundled `orchestrator.md`
 (blank-line joined). Deliberate behavior change: a user file no longer replaces
 the bundled prompt — identity first, mechanics always after, so the bundled
