@@ -5,6 +5,18 @@ format is stated once in SYSTEM.md §2.
 
 ## Unreleased
 
+#### Orchestrator guidance for matching models to the work · 2026-08-30 00:57 · kupxnwosrqrz
+
+The bundled `orchestrator.md` — injected into every orchestrating parent — now
+has a "Matching the model to the work" section: `spawn`'s `model` param beats a
+persona's frontmatter `model:`, which beats the parent's model; cheap/fast for
+lookups, sweeps and plumbing, strongest for architecture and contract
+decisions, and persona presets are overridable floors. README documents the
+precedence chain (Personas) and points at the guidance (Orchestrator mode);
+one test pins the section heading. No code changes — the mechanism
+(`manager.ts` precedence) already existed; this lane shipped the missing
+judgment.
+
 #### Orchestrator prompt: one user file, prepended · 2026-08-30 00:53 · xytxyolt
 
 The three-file overlay design (wholesale + `-head.md` + `-tail.md`) is gone;
