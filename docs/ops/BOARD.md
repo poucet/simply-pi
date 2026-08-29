@@ -17,6 +17,7 @@ Legend: 🚧 in flight · ✅ landed · ⏸ deferred.
 | 🚧 | 2026-08-29 | P1 | authority | design doc (PROPOSAL): per-role write authority for subagents — ROLE-WRITE-AUTHORITY.md awaits human review (workspace `.workspaces/authority`) |
 | 🚧 | 2026-08-30 | P2 | model-routing | cost-aware model routing: orchestrator guidance to spawn simple tasks on cheaper models; role files prespecify `model:` (mechanism exists — spawn param > persona > parent, manager.ts:751) |
 | 🚧 | 2026-08-30 | P1 | orchestrator-single | replace the three-file head/tail overlay design with a single user `subagents-orchestrator.md` composed BEFORE the bundled mechanics (supersedes the overlay feature landed earlier today) |
+| 🚧 | 2026-08-30 | P2 | md-mentions | `@path` mention expansion for markdown prompt files (orchestrator.md user copy, persona system prompts): recursive, fail-silent on missing targets, cycle-detected, deduped; upstream proposal for AGENTS.md core loading |
 
 ## Deferred by decision
 
