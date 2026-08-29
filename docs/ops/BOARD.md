@@ -15,6 +15,7 @@ Legend: 🚧 in flight · ✅ landed · ⏸ deferred.
 | Status | Date | Pri | Label | What |
 |---|---|---|---|---|
 | 🚧 | 2026-08-29 | P1 | authority | design doc (PROPOSAL): per-role write authority for subagents — ROLE-WRITE-AUTHORITY.md awaits human review (workspace `.workspaces/authority`) |
+| 🚧 | 2026-08-30 | P1 | epoch-research | research: can ../epoch (CoW checkpointed overlay FS) serve the subagents workflow — fencing or fast lane workspaces? |
 
 ## Deferred by decision
 
