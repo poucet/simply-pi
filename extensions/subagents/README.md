@@ -282,11 +282,23 @@ name: reviewer
 description: Reviews a diff and reports blocking issues
 tools: read, grep, find, ls, bash
 model: anthropic/claude-sonnet-4-5
+context: fresh
 ---
 You review the change in your working directory...
 ```
 
 Without a persona a child inherits your model, thinking level and tools.
+
+Optional `context:` sets the persona's default context mode — one of `fresh`,
+`forked`, `compacted` or `auto` — for spawns that don't pass their own `context`.
+Precedence: **spawn param > persona frontmatter > `auto`**. An unknown value is
+ignored (the persona still works, falling through to `auto`).
+
+In `tools:` a `"*"` (the Claude Code convention) means "inherit everything":
+pi's tool allowlist matches literal names, so a `"*"` reaching it would leave
+the child with no tools. Any `"*"` in the list — alone or alongside names —
+removes the restriction entirely; names listed next to a `"*"` are ignored,
+since the star already granted them.
 
 ## Worktrees
 

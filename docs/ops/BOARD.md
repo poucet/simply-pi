@@ -22,3 +22,7 @@ Legend: 🚧 in flight · ✅ landed · ⏸ deferred.
 ## Deferred by decision
 
 ## Landed index
+
+| Status | Date | Pri | Label | What |
+|---|---|---|---|---|
+| ✅ | 2026-08-30 | P1 | frontmatter | subagents ext: persona `context:` frontmatter + `tools: "*"` allow-all · sxzvkuxyzyrv |
