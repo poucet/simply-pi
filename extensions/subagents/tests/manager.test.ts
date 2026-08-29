@@ -1041,3 +1041,29 @@ test("the registry node carries the label and neither blob", () => {
 	// And the node stays small regardless of how big the child's text was.
 	assert.ok(JSON.stringify(node).length < 1000, "registry node should not carry blobs");
 });
+
+// --- the built-in child protocol --------------------------------------------
+//
+// Every spawned child receives this section verbatim from `buildSystemPrompt`.
+// The cwd line is a contract: it must advise, never prohibit, because some
+// briefs deliberately send a child outside its own tree (shared-workspace
+// lanes, evidence written to absolute paths). Pin the sentence so an absolutist
+// regression cannot slip in unnoticed.
+
+test("the built-in protocol presents the cwd as advice, not a prohibition", () => {
+	const m = new SubagentManager({ onChange: () => {}, onMail: () => {} }, {});
+	const prompt = (m as any).buildSystemPrompt(
+		"one",
+		"do the thing",
+		"/w/one",
+		"/w/NOTES.md",
+		undefined,
+	);
+	assert.ok(
+		prompt.includes(
+			"Your working directory is /w/one. Sibling agents may be working in other directories, so\n" +
+				"stay inside your own tree unless your task explicitly sends you elsewhere.",
+		),
+		`the cwd line must yield to the task's brief, got:\n${prompt}`,
+	);
+});
