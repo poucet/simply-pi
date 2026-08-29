@@ -2,14 +2,16 @@
  * Persona discovery.
  *
  * A persona is a markdown file with YAML frontmatter that gives a child agent a
- * role, a default model and a tool allowlist. Personas are optional: a child
- * with no persona simply inherits the parent's model, thinking level and tools.
+ * role, a default model, a tool allowlist and a default context mode. Personas
+ * are optional: a child with no persona simply inherits the parent's model,
+ * thinking level and tools.
  *
  *     ---
  *     name: reviewer
  *     description: Reviews a diff and reports blocking issues
  *     tools: read, grep, find, ls, bash
  *     model: anthropic/claude-sonnet-4-5
+ *     context: fresh
  *     ---
  *     You are a meticulous reviewer. ...
  */
@@ -17,12 +19,14 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import type { ContextMode } from "./types.ts";
 
 export interface Persona {
 	name: string;
 	description: string;
 	tools?: string[];
 	model?: string;
+	context?: ContextMode;
 	systemPrompt: string;
 	source: "user" | "project";
 	filePath: string;
@@ -33,15 +37,39 @@ type PersonaFrontmatter = {
 	description?: unknown;
 	tools?: unknown;
 	model?: unknown;
+	context?: unknown;
 };
 
-/** `tools: read, bash` and `tools: [read, bash]` are both valid YAML and both in use. */
+const CONTEXT_MODES: readonly ContextMode[] = ["auto", "fresh", "forked", "compacted"];
+
+/**
+ * `context: fresh` and friends set a persona's default context mode. An absent,
+ * mistyped or unknown value is `undefined` (fall through to the next layer of
+ * the precedence: spawn param > persona > "auto") rather than an error — a bad
+ * frontmatter key must never brick the persona it sits in.
+ */
+export function parseContextMode(value: unknown): ContextMode | undefined {
+	return typeof value === "string" && CONTEXT_MODES.includes(value as ContextMode)
+		? (value as ContextMode)
+		: undefined;
+}
+
+/**
+ * `tools: read, bash` and `tools: [read, bash]` are both valid YAML and both in use.
+ *
+ * A `"*"` anywhere in the list means "inherit everything": pi's `--tools` is a
+ * plain name allowlist that matches literal tool names, so a `"*"` that reached it
+ * would strip the child's tools instead of granting them. It returns the
+ * no-restriction value (`undefined`) instead, and any names listed alongside a
+ * `"*"` are ignored — they were already granted.
+ */
 export function parseToolList(value: unknown): string[] | undefined {
 	const raw = Array.isArray(value) ? value : typeof value === "string" ? value.split(",") : [];
 	const tools = raw
 		.filter((t): t is string => typeof t === "string")
 		.map((t) => t.trim())
 		.filter(Boolean);
+	if (tools.includes("*")) return undefined;
 	return tools.length > 0 ? tools : undefined;
 }
 
@@ -77,6 +105,7 @@ function loadDir(dir: string, source: "user" | "project"): Persona[] {
 			description: typeof frontmatter.description === "string" ? frontmatter.description : "",
 			tools: parseToolList(frontmatter.tools),
 			model: typeof frontmatter.model === "string" ? frontmatter.model : undefined,
+			context: parseContextMode(frontmatter.context),
 			systemPrompt: body,
 			source,
 			filePath,

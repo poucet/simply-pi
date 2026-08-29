@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { describePersonas, discoverPersonas, findPersona, parseToolList } from "../personas.ts";
+import { describePersonas, discoverPersonas, findPersona, parseContextMode, parseToolList } from "../personas.ts";
 
 // --- parseToolList --------------------------------------------------------
 
@@ -23,6 +23,36 @@ test("parseToolList drops empties and non-strings", () => {
 	assert.equal(parseToolList(42), undefined);
 });
 
+test("parseToolList: a star means inherit everything", () => {
+	// pi's `--tools` is a literal name allowlist, so a "*" that reached it would
+	// strip the child's tools instead of granting them (the Claude Code convention).
+	assert.equal(parseToolList(["*"]), undefined);
+	assert.equal(parseToolList("*"), undefined);
+	// Names alongside a star are ignored: the star already granted them.
+	assert.equal(parseToolList(["read", "*", "bash"]), undefined);
+	assert.equal(parseToolList("read, *"), undefined);
+});
+
+// --- parseContextMode -----------------------------------------------------
+
+test("parseContextMode accepts the four valid values", () => {
+	for (const mode of ["auto", "fresh", "forked", "compacted"] as const) {
+		assert.equal(parseContextMode(mode), mode);
+	}
+});
+
+test("parseContextMode rejects anything else rather than throwing", () => {
+	// A bad frontmatter key must not brick the persona it sits in.
+	assert.equal(parseContextMode("Fresh"), undefined);
+	assert.equal(parseContextMode("fork"), undefined);
+	assert.equal(parseContextMode("compacted, forked"), undefined);
+	assert.equal(parseContextMode(""), undefined);
+	assert.equal(parseContextMode("auto".repeat(2)), undefined);
+	assert.equal(parseContextMode(42), undefined);
+	assert.equal(parseContextMode(["fresh"]), undefined);
+	assert.equal(parseContextMode(undefined), undefined);
+});
+
 // --- discovery ------------------------------------------------------------
 
 function persona(body: string): string {
@@ -38,7 +68,12 @@ test("discoverPersonas reads user personas and honours project trust", () => {
 
 	writeFileSync(
 		join(agentDir, "agents", "reviewer.md"),
-		persona("---\nname: reviewer\ndescription: reviews diffs\ntools: read, bash\nmodel: x/y\n---\nBe strict.\n"),
+		persona("---\nname: reviewer\ndescription: reviews diffs\ntools: read, bash\nmodel: x/y\ncontext: forked\n---\nBe strict.\n"),
+	);
+	// Bad frontmatter keys are skipped, not fatal.
+	writeFileSync(
+		join(agentDir, "agents", "typist.md"),
+		persona('---\nname: typist\ncontext: Forked\ntools: ["*"]\n---\nType.\n'),
 	);
 	// No frontmatter name: the filename wins.
 	writeFileSync(join(agentDir, "agents", "scout.md"), persona("Scout the code.\n"));
@@ -57,20 +92,27 @@ test("discoverPersonas reads user personas and honours project trust", () => {
 		const userOnly = discoverPersonas(project, false);
 		assert.deepEqual(
 			userOnly.map((p) => p.name).sort(),
-			["reviewer", "scout"],
+			["reviewer", "scout", "typist"],
 		);
 		const reviewer = findPersona(userOnly, "REVIEWER");
 		assert.equal(reviewer?.source, "user");
 		assert.deepEqual(reviewer?.tools, ["read", "bash"]);
 		assert.equal(reviewer?.model, "x/y");
+		assert.equal(reviewer?.context, "forked");
 		assert.match(reviewer!.systemPrompt, /Be strict/);
 		assert.equal(findPersona(userOnly, "scout")?.description, "");
+		// Mistyped context falls through to undefined; a star in tools means inherit all.
+		const typist = findPersona(userOnly, "typist");
+		assert.equal(typist?.context, undefined);
+		assert.equal(typist?.tools, undefined);
 
 		// Trusted project: the project persona wins over the user one.
 		const withProject = discoverPersonas(join(project, "nested", "deeper"), true);
 		const overridden = findPersona(withProject, "reviewer");
 		assert.equal(overridden?.source, "project");
 		assert.equal(overridden?.description, "project override");
+		// No context key in the project override: absent is undefined, not "auto".
+		assert.equal(overridden?.context, undefined);
 
 		assert.match(describePersonas(userOnly), /reviewer — reviews diffs/);
 		assert.equal(describePersonas([]), "none");

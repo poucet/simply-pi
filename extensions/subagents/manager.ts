@@ -682,9 +682,14 @@ export class SubagentManager {
 		const report: SpawnProgressReporter = progressReporter(options.onUpdate);
 		report({ stage: "context", name });
 		const messages = parentMessages(ctx);
-		// Token-first: forking costs nothing and loses nothing, so it stays the
-		// default until a copy would not comfortably fit. See context.ts.
-		const mode = resolveMode(options.context ?? "auto", messages.length, contextUsage(ctx));
+		// Precedence: this spawn's request, else the persona's frontmatter default,
+		// else auto. Token-first: forking costs nothing and loses nothing, so it
+		// stays the default until a copy would not comfortably fit. See context.ts.
+		const mode = resolveMode(
+			options.context ?? persona?.context ?? "auto",
+			messages.length,
+			contextUsage(ctx),
+		);
 		let summary: string | undefined;
 		if (mode === "compacted") {
 			const leafId = ctx.sessionManager?.getLeafId?.() ?? null;

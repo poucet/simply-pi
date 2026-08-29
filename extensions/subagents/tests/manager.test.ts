@@ -798,6 +798,91 @@ test("a session with no leaf id is never served from the cache", async () => {
 	}
 });
 
+// --- persona context precedence ----------------------------------------------
+//
+// The chain is spawn param > persona frontmatter > "auto". `summarizeCalls` is
+// the observable: only a resolved "compacted" mode summarizes, while "auto"
+// against this harness's empty parent conversation resolves to "fresh".
+
+import type { Persona } from "../personas.ts";
+
+/** A minimal persona whose only interesting field is its context mode. */
+function contextPersona(name: string, context: Persona["context"]): Persona {
+	return {
+		name,
+		description: "",
+		systemPrompt: `You are ${name}.`,
+		source: "user",
+		filePath: `/${name}.md`,
+		context,
+	};
+}
+
+test("a persona's frontmatter context is the spawn's default", async () => {
+	const { m, ctx, restore } = spawnHarness();
+	try {
+		// Auto against an empty parent conversation means fresh, so a summarize call
+		// here can only come from the persona's "compacted".
+		await m
+			.spawn(ctx, [contextPersona("compactor", "compacted")], {
+				name: "one",
+				task: "t",
+				persona: "compactor",
+			})
+			.catch(() => {});
+		assert.equal(m.summarizeCalls, 1);
+	} finally {
+		restore();
+	}
+});
+
+test("a persona without a context mode falls back to auto", async () => {
+	const { m, ctx, restore } = spawnHarness();
+	try {
+		await m
+			.spawn(ctx, [contextPersona("plain", undefined)], { name: "one", task: "t", persona: "plain" })
+			.catch(() => {});
+		assert.equal(m.summarizeCalls, 0, "auto must resolve fresh here, not compacted");
+	} finally {
+		restore();
+	}
+});
+
+test("the spawn param beats the persona's context mode", async () => {
+	{
+		const { m, ctx, restore } = spawnHarness();
+		try {
+			await m
+				.spawn(ctx, [contextPersona("compactor", "compacted")], {
+					name: "one",
+					task: "t",
+					persona: "compactor",
+					context: "fresh",
+				})
+				.catch(() => {});
+			assert.equal(m.summarizeCalls, 0, "fresh param must win over the persona's compacted");
+		} finally {
+			restore();
+		}
+	}
+	{
+		const { m, ctx, restore } = spawnHarness();
+		try {
+			await m
+				.spawn(ctx, [contextPersona("scratchpad", "fresh")], {
+					name: "one",
+					task: "t",
+					persona: "scratchpad",
+					context: "compacted",
+				})
+				.catch(() => {});
+			assert.equal(m.summarizeCalls, 1, "compacted param must win over the persona's fresh");
+		} finally {
+			restore();
+		}
+	}
+});
+
 // --- which MCP servers a child boots ----------------------------------------
 //
 // Three layers, most specific winning: the install-wide `childMcpServers`, the
