@@ -1,5 +1,5 @@
 /**
- * The orchestrator prompt and the three user files that shape it.
+ * The orchestrator prompt and the one user file that shapes it.
  *
  * `orchestratorPrompt()` is module-private, so these tests drive it through the
  * only path that injects it — `before_agent_start` — with `PI_CODING_AGENT_DIR`
@@ -7,6 +7,10 @@
  * `tests/wiring.test.ts` uses to vary settings. The bundled `orchestrator.md` is
  * read from the tree rather than restated here, so these assertions cannot
  * drift when the guidance text is edited.
+ *
+ * Composition: `~/.pi/agent/subagents-orchestrator.md`, when non-empty, is
+ * **prepended** to the bundled prompt — user identity first, framework
+ * mechanics always after, joined by a single blank line.
  */
 
 import assert from "node:assert/strict";
@@ -64,7 +68,7 @@ function withAgentFiles(files: Record<string, string> = {}) {
 	};
 }
 
-test("with no user files the bundled prompt is injected verbatim", async () => {
+test("with no user file the bundled prompt is injected verbatim", async () => {
 	const h = withAgentFiles();
 	try {
 		assert.equal(await h.guidance(), bundled);
@@ -73,58 +77,17 @@ test("with no user files the bundled prompt is injected verbatim", async () => {
 	}
 });
 
-test("a non-empty wholesale copy replaces the bundled prompt", async () => {
-	const h = withAgentFiles({ "subagents-orchestrator.md": "custom guidance" });
+test("a non-empty user file is prepended to the bundled prompt", async () => {
+	const h = withAgentFiles({ "subagents-orchestrator.md": "you are patchbay; brief lanes with collisions" });
 	try {
-		assert.equal(await h.guidance(), "custom guidance");
+		assert.equal(await h.guidance(), `you are patchbay; brief lanes with collisions\n\n${bundled}`);
 	} finally {
 		h.restore();
 	}
 });
 
-test("a head overlay is prepended to the bundled prompt", async () => {
-	const h = withAgentFiles({ "subagents-orchestrator-head.md": "HEAD" });
-	try {
-		assert.equal(await h.guidance(), `HEAD\n\n${bundled}`);
-	} finally {
-		h.restore();
-	}
-});
-
-test("a tail overlay is appended to the bundled prompt", async () => {
-	const h = withAgentFiles({ "subagents-orchestrator-tail.md": "TAIL" });
-	try {
-		assert.equal(await h.guidance(), `${bundled}\n\nTAIL`);
-	} finally {
-		h.restore();
-	}
-});
-
-test("head and tail compose around a wholesale copy, joined by blank lines", async () => {
-	// Synthetic base text, so the composition — and only the composition — is
-	// what is under test here: one blank line between pieces, never two.
-	const h = withAgentFiles({
-		"subagents-orchestrator-head.md": "HEAD",
-		"subagents-orchestrator.md": "BASE",
-		"subagents-orchestrator-tail.md": "TAIL",
-	});
-	try {
-		const guidance = await h.guidance();
-		assert.equal(guidance, "HEAD\n\nBASE\n\nTAIL");
-		assert.ok(!guidance.includes("\n\n\n"), "a doubled separator between pieces");
-	} finally {
-		h.restore();
-	}
-});
-
-test("absent or whitespace-only overlay files contribute nothing", async () => {
-	// The overlays are whitespace-only, and the wholesale copy is too — so all
-	// three fall away and the result is exactly the bundled prompt.
-	const h = withAgentFiles({
-		"subagents-orchestrator-head.md": " \n\t\n",
-		"subagents-orchestrator.md": "\n  \n",
-		"subagents-orchestrator-tail.md": "  ",
-	});
+test("an absent or whitespace-only user file contributes nothing", async () => {
+	const h = withAgentFiles({ "subagents-orchestrator.md": " \n\t\n" });
 	try {
 		assert.equal(await h.guidance(), bundled);
 	} finally {
@@ -132,12 +95,25 @@ test("absent or whitespace-only overlay files contribute nothing", async () => {
 	}
 });
 
-test("every file is re-read on each turn, so edits apply without a reload", async () => {
-	const h = withAgentFiles({ "subagents-orchestrator-tail.md": "first tail" });
+test("the pieces are joined by exactly one blank line, however the file ends", async () => {
+	// The user file carries trailing whitespace, so a naive concat would double
+	// the separator; the join must trim each piece first.
+	const h = withAgentFiles({ "subagents-orchestrator.md": "identity\n\n  \n" });
 	try {
-		assert.equal(await h.guidance(), `${bundled}\n\nfirst tail`);
-		writeFileSync(join(h.dir, "subagents-orchestrator-tail.md"), "second tail");
-		assert.equal(await h.guidance(), `${bundled}\n\nsecond tail`);
+		const guidance = await h.guidance();
+		assert.equal(guidance, `identity\n\n${bundled}`);
+		assert.ok(!guidance.includes("\n\n\n"), "a doubled separator between pieces");
+	} finally {
+		h.restore();
+	}
+});
+
+test("the user file is re-read on each turn, so edits apply without a reload", async () => {
+	const h = withAgentFiles({ "subagents-orchestrator.md": "first identity" });
+	try {
+		assert.equal(await h.guidance(), `first identity\n\n${bundled}`);
+		writeFileSync(join(h.dir, "subagents-orchestrator.md"), "second identity");
+		assert.equal(await h.guidance(), `second identity\n\n${bundled}`);
 	} finally {
 		h.restore();
 	}

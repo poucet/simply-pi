@@ -246,20 +246,18 @@ function saveSettings(settings: SubagentsSettings): void {
 
 /**
  * Orchestrator guidance lives in `orchestrator.md` next to this file so it can be
- * edited without touching code. Three files in the agent directory shape what is
- * injected, all re-read on every turn so edits apply without a reload:
+ * edited without touching code. One user file shapes what is injected, re-read on
+ * every turn so edits apply without a reload:
  *
- *   - `subagents-orchestrator.md` — a wholesale replacement: a non-empty copy
- *     here wins over the bundled prompt.
- *   - `subagents-orchestrator-head.md` — if non-empty, prepended to the base.
- *   - `subagents-orchestrator-tail.md` — if non-empty, appended to the base.
+ *   - `~/.pi/agent/subagents-orchestrator.md` — its non-empty content is
+ *     **prepended** to the bundled prompt, joined with a blank line.
  *
- * The overlays compose around **whichever base won** — the user's wholesale copy
- * if there is one, else the bundled prompt — joined with a blank line between
- * the pieces. That is the whole point of them: a role or identity overlay can
- * add itself to the guidance without duplicating the (drifting) base. Absent or
- * whitespace-only files contribute nothing; with none of the three in place the
- * result is exactly the bundled prompt (or empty, if even that is missing).
+ * The user file is the identity and judgment layer ("you are patchbay; never run
+ * scribe and integrator together"); the bundled mechanics (stall response, reaping,
+ * anti-double-work) follow it automatically — always current with the code, never
+ * duplicated, never drifting. An absent or whitespace-only file contributes
+ * nothing, and the result is then exactly the bundled prompt (or empty, if even
+ * that is missing).
  */
 const BUNDLED_ORCHESTRATOR_PROMPT = fileURLToPath(new URL("./orchestrator.md", import.meta.url));
 
@@ -274,15 +272,11 @@ function readPromptFile(path: string): string {
 
 function orchestratorPrompt(): string {
 	const dir = getAgentDir();
-	// The base is unchanged from the pre-overlay behaviour: a non-empty wholesale
-	// user copy replaces the bundled prompt, so existing setups behave identically.
-	const base =
-		readPromptFile(join(dir, "subagents-orchestrator.md")) || readPromptFile(BUNDLED_ORCHESTRATOR_PROMPT);
-	// Head and tail compose around whichever base won.
+	// The user file is the identity layer, prepended; the bundled mechanics
+	// always follow it, so they stay current without the user copying anything.
 	return [
-		readPromptFile(join(dir, "subagents-orchestrator-head.md")),
-		base,
-		readPromptFile(join(dir, "subagents-orchestrator-tail.md")),
+		readPromptFile(join(dir, "subagents-orchestrator.md")),
+		readPromptFile(BUNDLED_ORCHESTRATOR_PROMPT),
 	]
 		.filter((piece) => piece !== "")
 		.join("\n\n");

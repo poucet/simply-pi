@@ -323,19 +323,24 @@ So the main loop defaults to delegating:
 Toggle with `/agents orchestrate off|nudge|strict` (persisted).
 
 The guidance text itself lives in `orchestrator.md` next to the code, re-read every
-turn so edits apply immediately. Three files in `~/.pi/agent/` shape what is
-injected, all re-read every turn:
+turn so edits apply immediately. One file in `~/.pi/agent/` shapes what is
+injected — `subagents-orchestrator.md`, also re-read every turn. Its non-empty
+content is **prepended** to the bundled guidance, joined with a blank line:
+your identity and delegation judgment first, the framework mechanics (stall
+response, reaping, anti-double-work) always after — current with the code, never
+copied, never drifting.
 
-- `subagents-orchestrator.md` — a wholesale replacement for the bundled prompt.
-  A non-empty copy here still wins over the bundled text, exactly as before.
-- `subagents-orchestrator-head.md` — if non-empty, prepended to the base.
-- `subagents-orchestrator-tail.md` — if non-empty, appended to the base.
+What belongs in it is the layer the bundled prompt cannot know: role identity
+("you are patchbay"), delegation policy ("never run scribe and integrator
+together"), standing instructions for how lanes are briefed ("tell every lane
+about collisions and assumptions to verify"). Absent or whitespace-only, it
+contributes nothing and the bundled prompt is used as-is.
 
-The overlays compose around **whichever base is in effect** — your wholesale copy
-if you have one, else the bundled prompt — joined with a blank line: head, base,
-tail. Absent or whitespace-only files contribute nothing, so an overlay needs no
-copy of the guidance it wraps: an identity or role overlay keeps the delegation
-rules it composes with, and the bundled prompt cannot drift out from under it.
+```markdown
+<!-- ~/.pi/agent/subagents-orchestrator.md -->
+You are the patchbay. Brief every lane with: the fence, the assumptions to
+verify, and the sibling lanes it may collide with.
+```
 
 ## UI
 
