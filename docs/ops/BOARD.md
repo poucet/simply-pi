@@ -22,6 +22,7 @@ Legend: 🚧 in flight · ✅ landed · ⏸ deferred.
 
 | Status | Date | Pri | Label | What |
 |---|---|---|---|---|
+| ✅ | 2026-08-30 | P1 | orchestrator-single | subagents ext: orchestrator prompt — one user file (`subagents-orchestrator.md`) prepended to the bundled guidance; head/tail overlays deleted · xytxyolt |
 | ✅ | 2026-08-30 | P1 | epoch-research | research (docs/research/epoch/EPOCH.md): epoch not viable as the fence or as workspace replacement today — rename(2) broken + symlink ENOSYS in macOS mounts block jj-in-mount; real value: 0.25 s mounts, containment-by-construction, `.vfs/debug/overlay` write-audit for scratch lanes |
 | ✅ | 2026-08-30 | P1 | orchestrator | subagents ext: head/tail overlay files for the orchestrator prompt · nvoslonyvptt |
 | ✅ | 2026-08-30 | P1 | protocol | subagents ext: built-in child protocol's cwd line is advice that yields to the task's brief (test-pinned) |

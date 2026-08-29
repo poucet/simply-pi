@@ -5,6 +5,18 @@ format is stated once in SYSTEM.md §2.
 
 ## Unreleased
 
+#### Orchestrator prompt: one user file, prepended · 2026-08-30 00:53 · xytxyolt
+
+The three-file overlay design (wholesale + `-head.md` + `-tail.md`) is gone;
+the head name was procedural, it was long, and it leaked the `orchestrator.md`
+naming detail. One file now: `~/.pi/agent/subagents-orchestrator.md`, whose
+non-empty content is **prepended** to the bundled `orchestrator.md`
+(blank-line joined). Deliberate behavior change: a user file no longer replaces
+the bundled prompt — identity first, mechanics always after, so the bundled
+stall/reaping/anti-double-work guidance stays current with the code without
+the user copying it. No back-compat kept: the superseded design is hours old
+and has one user.
+
 #### epoch research: fencing and fast spin-up verdicts · 2026-08-30 · rmluqlnnksxl
 
 `docs/research/epoch/EPOCH.md` measures `../epoch` (CoW checkpointed overlay
