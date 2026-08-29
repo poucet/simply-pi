@@ -5,6 +5,15 @@ format is stated once in SYSTEM.md §2.
 
 ## Unreleased
 
+#### Orchestrator prompt head/tail overlays · 2026-08-30 00:08 · nvoslonyvptt
+
+`~/.pi/agent/subagents-orchestrator-head.md` and `-tail.md` now compose
+(blank-line-joined) around whichever base is in effect — a non-empty wholesale
+`subagents-orchestrator.md` copy as before, else the bundled `orchestrator.md` —
+so a role/identity overlay no longer has to duplicate the guidance it wraps.
+Absent or whitespace-only files contribute nothing; existing setups behave
+identically.
+
 #### The built-in child protocol presents the cwd as advice, not a prohibition · 2026-08-30 00:06 · muzwxpnq
 
 `buildSystemPrompt`'s cwd line no longer says "Stay inside it" — it says to stay
