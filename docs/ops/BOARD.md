@@ -25,4 +25,5 @@ Legend: 🚧 in flight · ✅ landed · ⏸ deferred.
 
 | Status | Date | Pri | Label | What |
 |---|---|---|---|---|
+| ✅ | 2026-08-30 | P1 | protocol | subagents ext: built-in child protocol's cwd line is advice that yields to the task's brief (test-pinned) |
 | ✅ | 2026-08-30 | P1 | frontmatter | subagents ext: persona `context:` frontmatter + `tools: "*"` allow-all · sxzvkuxyzyrv |

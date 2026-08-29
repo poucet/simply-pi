@@ -5,6 +5,14 @@ format is stated once in SYSTEM.md §2.
 
 ## Unreleased
 
+#### The built-in child protocol presents the cwd as advice, not a prohibition · 2026-08-30 00:06 · muzwxpnq
+
+`buildSystemPrompt`'s cwd line no longer says "Stay inside it" — it says to stay
+inside your own tree *unless the task explicitly sends you elsewhere*, because
+scribe/integrator lanes share the default workspace and designer lanes write
+evidence to absolute paths. A test now pins the sentence (manager.test.ts).
+Code change: yooutwkn.
+
 #### Personas: `context:` frontmatter and `tools: "*"` allow-all · 2026-08-30 00:08 · sxzvkuxyzyrv
 
 Persona frontmatter accepts an optional `context:` (`fresh | forked | compacted | auto`),
