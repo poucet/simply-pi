@@ -5,6 +5,22 @@ format is stated once in SYSTEM.md §2.
 
 ## Unreleased
 
+#### `@path` mention expansion for markdown prompts · 2026-08-30 00:58 · snztvzrnutrr
+
+Persona bodies and the user orchestrator file (`~/.pi/agent/orchestrator.md`)
+now expand whole-line `@path` mentions — a line that is only `@path` — into the
+target file's content. Relative paths resolve against the mentioning file's
+directory, `~/` to home, symlinks follow; includes nest with per-prompt dedup
+(each file contributes once, which also terminates cycles) and a depth cap of
+five. The load-bearing semantic is **fail-silent includes**: a mention of an
+absent file contributes nothing (one stderr note per path per process), so a
+shared generic template can reference optional per-repo hooks (`@.pi/PROJECT.md`)
+that fire where they exist and contribute nothing where they don't — prompt
+assembly by composition instead of copying. Exists-but-unreadable targets are
+reported on every expansion. The bundled orchestrator.md and the generated child
+protocol are deliberately not expanded. New mentions.ts; 20 new tests
+(gate 624 pass).
+
 #### Orchestrator guidance for matching models to the work · 2026-08-30 00:57 · kupxnwosrqrz
 
 The bundled `orchestrator.md` — injected into every orchestrating parent — now

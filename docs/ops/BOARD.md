@@ -22,6 +22,7 @@ Legend: 🚧 in flight · ✅ landed · ⏸ deferred.
 
 | Status | Date | Pri | Label | What |
 |---|---|---|---|---|
+| ✅ | 2026-08-30 | P1 | md-mentions | subagents ext: whole-line `@path` mention expansion (fail-silent includes) for persona bodies + the user orchestrator file · snztvzrnutrr |
 | ✅ | 2026-08-30 | P1 | orchestrator-single | subagents ext: orchestrator prompt — one user file (`~/.pi/agent/orchestrator.md`) prepended to the bundled guidance; head/tail overlays and the old wholesale name deleted · xytxyolt |
 | ✅ | 2026-08-30 | P1 | epoch-research | research (docs/research/epoch/EPOCH.md): epoch not viable as the fence or as workspace replacement today — rename(2) broken + symlink ENOSYS in macOS mounts block jj-in-mount; real value: 0.25 s mounts, containment-by-construction, `.vfs/debug/overlay` write-audit for scratch lanes |
 | ✅ | 2026-08-30 | P1 | orchestrator | subagents ext: head/tail overlay files for the orchestrator prompt · nvoslonyvptt |

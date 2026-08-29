@@ -307,6 +307,45 @@ at all. The bundled `orchestrator.md` tells orchestrating parents to match the
 model to the weight of the work — see its "Matching the model to the work"
 section.
 
+### `@path` includes
+
+A prompt file can include another file by giving a mention a **whole line of
+its own**:
+
+```markdown
+You review the change in your working directory.
+@shared/review-checklist.md
+@.pi/PROJECT.md
+```
+
+The grammar is deliberately narrow — a line that is *only* `@path` (nothing
+before or after). An inline `@foo` mid-sentence stays literal text, because
+agents @mention each other in prompts and expanding those would corrupt
+meaning. The same expansion applies to a persona's body (mentions resolve
+against the persona file's own directory, so a project persona can @ shared
+project docs) and to the user orchestrator file in `~/.pi/agent/`. It does
+**not** apply to the bundled `orchestrator.md` or the generated child protocol
+— only user-authored markdown is expanded.
+
+Resolution follows the mentioning file: relative paths resolve against its
+directory, `/` is absolute, `~/` is home. Symlinks are followed, so a template
+may @ a symlinked shared file (this repo's `SYSTEM.md` convention). Includes
+nest (mentions inside an included file expand too), with two guards: a file
+already included anywhere in the assembled prompt contributes once (which
+also terminates any cycle), and chains are capped at five levels.
+
+The load-bearing semantic is **fail-silent includes for absent targets**: a
+mention of a file that does not exist contributes nothing and raises nothing —
+at most one stderr note per path per process, so it is silent in steady state
+but discoverable. A file that exists but can't be read (permissions) is
+reported on every expansion, because someone created it and something is
+wrong with it.
+
+That is what makes shared templates scalable: a generic shared system file
+can reference optional per-repo hooks — `@.pi/PROJECT.md`, `@docs/STYLE.md` —
+that fire where they exist and contribute nothing where they don't. Prompt
+assembly becomes composition instead of copying.
+
 ## Worktrees
 
 **This extension knows nothing about git, jj, or worktrees.** A child just takes a

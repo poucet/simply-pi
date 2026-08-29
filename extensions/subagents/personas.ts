@@ -14,11 +14,19 @@
  *     context: fresh
  *     ---
  *     You are a meticulous reviewer. ...
+ *
+ * The body becomes the child's system prompt with whole-line `@path` mentions
+ * expanded (see mentions.ts), resolving against the persona file's own
+ * directory — a project persona can @ shared project docs, a user persona can
+ * @ other files under `~/.pi/agent`. A mention of a file that doesn't exist
+ * contributes nothing, which is what lets a generic role reference optional
+ * per-repo hooks.
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import { expandMentions } from "./mentions.ts";
 import type { ContextMode } from "./types.ts";
 
 export interface Persona {
@@ -100,13 +108,17 @@ function loadDir(dir: string, source: "user" | "project"): Persona[] {
 			typeof frontmatter.name === "string" ? frontmatter.name : path.basename(entry.name, ".md");
 		if (!body.trim()) continue;
 
+		// Mentions resolve against the persona file's directory, and the persona
+		// file itself seeds the dedup set, so a persona cannot @ itself into a loop.
+		const { text: systemPrompt } = expandMentions(body, path.dirname(filePath), filePath);
+
 		personas.push({
 			name,
 			description: typeof frontmatter.description === "string" ? frontmatter.description : "",
 			tools: parseToolList(frontmatter.tools),
 			model: typeof frontmatter.model === "string" ? frontmatter.model : undefined,
 			context: parseContextMode(frontmatter.context),
-			systemPrompt: body,
+			systemPrompt,
 			source,
 			filePath,
 		});

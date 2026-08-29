@@ -40,6 +40,7 @@ import {
 } from "./hibernate.ts";
 import { isSubagentBoot, sessionIdentity } from "./identity.ts";
 import type { MailKind } from "./mailbox.ts";
+import { expandMentions } from "./mentions.ts";
 import { SubagentManager, onDeadlineExceeded } from "./manager.ts";
 import {
 	DEFAULT_AUTO_RESTORE_MAX_AGE_MINUTES,
@@ -260,6 +261,13 @@ function saveSettings(settings: SubagentsSettings): void {
  * the code carries the mechanics. An absent or whitespace-only user file contributes
  * nothing, and the result is then exactly the bundled prompt (or empty, if even
  * that is missing).
+ *
+ * The user file is **user-authored markdown**, so whole-line `@path` mentions in
+ * it are expanded (see mentions.ts): it can @ shared prompt material instead of
+ * copying it, and can @ optional files that only exist in some setups. The
+ * bundled orchestrator.md is deliberately *not* expanded — it is code-adjacent
+ * mechanics, authored as final, and expanding it would let a typo'd mention
+ * silently delete guidance.
  */
 const BUNDLED_ORCHESTRATOR_PROMPT = fileURLToPath(new URL("./orchestrator.md", import.meta.url));
 
@@ -272,12 +280,24 @@ function readPromptFile(path: string): string {
 	}
 }
 
+/**
+ * A *user-authored* prompt file: read, then expanded for whole-line `@path`
+ * mentions (missing targets contribute nothing — see mentions.ts). The bundled
+ * orchestrator.md deliberately goes through plain `readPromptFile` instead.
+ */
+function readUserPromptFile(p: string): string {
+	const text = readPromptFile(p);
+	if (text === "") return "";
+	return expandMentions(text, dirname(p), p).text.trim();
+}
+
 function orchestratorPrompt(): string {
 	const dir = getAgentDir();
 	// The user file is the identity layer, prepended; the bundled mechanics
 	// always follow it, so they stay current without the user copying anything.
+	// Only the user's copy is mention-expanded; the bundled text stays verbatim.
 	return [
-		readPromptFile(join(dir, "orchestrator.md")),
+		readUserPromptFile(join(dir, "orchestrator.md")),
 		readPromptFile(BUNDLED_ORCHESTRATOR_PROMPT),
 	]
 		.filter((piece) => piece !== "")
