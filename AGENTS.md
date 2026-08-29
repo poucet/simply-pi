@@ -31,7 +31,7 @@ them from:
 - **No build step.** TypeScript, executed directly by pi. The gate is the test
   suite: `node extensions/subagents/tests/run.mjs` (a single file: append its
   path). Gates run unfiltered, verbatim in the report.
-- The human channel is `docs/simply-chris/` (gitignored); live state is
+- The human channel is `docs/live/` (gitignored); live state is
   `docs/live/` (gitignored) — see SYSTEM.md §2 for the split.
 
 ## How this repo is wired into pi
