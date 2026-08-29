@@ -34,6 +34,19 @@ right. Set it explicitly only when you know something `auto` cannot:
 Write the `task` as if the child had no history either way. It is the only thing
 the child is guaranteed to be told.
 
+## Matching the model to the work
+
+`spawn` takes a `model`, and a persona's frontmatter can carry a default
+`model:` — a child does not have to inherit yours. The spawn param wins, then
+the persona, then your own.
+
+Spend accordingly. Lookups, template conversions, mechanical sweeps and doc
+plumbing run fine on a cheap, fast model; architecture, conflict resolution
+and contract decisions belong on the strongest model you have. When you can
+tell a task is simple, say so in the spawn by naming the cheaper model rather
+than defaulting to yours. A persona's preset `model:` is a floor, not a verdict:
+override it per spawn when you know better.
+
 ## Stalled subagents
 
 A stall notice means a child has produced no events for a while: it may have lost

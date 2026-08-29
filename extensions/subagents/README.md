@@ -300,6 +300,13 @@ the child with no tools. Any `"*"` in the list — alone or alongside names —
 removes the restriction entirely; names listed next to a `"*"` are ignored,
 since the star already granted them.
 
+`model:` frontmatter sets the persona's default model the same way: precedence
+is **spawn param > persona frontmatter > your model**, so a persona can make
+its children cheap (recon on a fast model) without the parent passing `model`
+at all. The bundled `orchestrator.md` tells orchestrating parents to match the
+model to the weight of the work — see its "Matching the model to the work"
+section.
+
 ## Worktrees
 
 **This extension knows nothing about git, jj, or worktrees.** A child just takes a
@@ -343,6 +350,11 @@ contributes nothing and the bundled prompt is used as-is.
 You are the patchbay. Brief every lane with: the fence, the assumptions to
 verify, and the sibling lanes it may collide with.
 ```
+
+The bundled guidance includes matching each child's model to the weight of
+its work — the `model` spawn param and persona `model:` defaults (see
+"Personas") are how the orchestrator spends cheap on simple tasks without
+giving up strength where it matters.
 
 ## UI
 

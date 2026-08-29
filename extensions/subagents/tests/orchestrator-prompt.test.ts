@@ -118,3 +118,14 @@ test("the user file is re-read on each turn, so edits apply without a reload", a
 		h.restore();
 	}
 });
+
+test("the bundled prompt still teaches model choice", async () => {
+	// Only the section heading is pinned: the wording may be refined, but the
+	// model-choice guidance must not be deleted by accident. This test is
+	// independent of the harness above — it reads the file directly via
+	// `bundled` — so it survives changes to that harness.
+	assert.ok(
+		bundled.includes("## Matching the model to the work"),
+		"orchestrator.md lost its model-choice section",
+	);
+});
