@@ -15,6 +15,7 @@ Legend: 🚧 in flight · ✅ landed · ⏸ deferred.
 | Status | Date | Pri | Label | What |
 |---|---|---|---|---|
 | 🚧 | 2026-08-29 | P1 | authority | design doc (PROPOSAL): per-role write authority for subagents — ROLE-WRITE-AUTHORITY.md awaits human review (workspace `.workspaces/authority`) |
+| 🚧 | 2026-08-30 | P2 | model-routing | cost-aware model routing: orchestrator guidance to spawn simple tasks on cheaper models; role files prespecify `model:` (mechanism exists — spawn param > persona > parent, manager.ts:751) |
 
 ## Deferred by decision
 
