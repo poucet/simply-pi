@@ -388,7 +388,7 @@ test("a user orchestrator file expands its mentions against the agent dir", asyn
 		assert.ok(guidance.includes("IDENTITY OVERLAY"), "user file expanded its mention");
 		assert.ok(guidance.includes(bundled), "the bundled base rode along");
 		assert.ok(
-			guidance.endsWith(`${bundled}`),
+			guidance === `IDENTITY OVERLAY\n\n${bundled}`,
 			`expected the expanded user file prepended to the bundled prompt, got:\n${guidance}`,
 		);
 	} finally {
