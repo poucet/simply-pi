@@ -1,0 +1,132 @@
+/**
+ * Persona discovery.
+ *
+ * A persona is a markdown file with YAML frontmatter that gives a child agent a
+ * role, a default model and a tool allowlist. Personas are optional: a child
+ * with no persona simply inherits the parent's model, thinking level and tools.
+ *
+ *     ---
+ *     name: reviewer
+ *     description: Reviews a diff and reports blocking issues
+ *     tools: read, grep, find, ls, bash
+ *     model: anthropic/claude-sonnet-4-5
+ *     ---
+ *     You are a meticulous reviewer. ...
+ */
+
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { CONFIG_DIR_NAME, getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
+
+export interface Persona {
+	name: string;
+	description: string;
+	tools?: string[];
+	model?: string;
+	systemPrompt: string;
+	source: "user" | "project";
+	filePath: string;
+}
+
+type PersonaFrontmatter = {
+	name?: unknown;
+	description?: unknown;
+	tools?: unknown;
+	model?: unknown;
+};
+
+/** `tools: read, bash` and `tools: [read, bash]` are both valid YAML and both in use. */
+export function parseToolList(value: unknown): string[] | undefined {
+	const raw = Array.isArray(value) ? value : typeof value === "string" ? value.split(",") : [];
+	const tools = raw
+		.filter((t): t is string => typeof t === "string")
+		.map((t) => t.trim())
+		.filter(Boolean);
+	return tools.length > 0 ? tools : undefined;
+}
+
+function loadDir(dir: string, source: "user" | "project"): Persona[] {
+	if (!fs.existsSync(dir)) return [];
+	let entries: fs.Dirent[];
+	try {
+		entries = fs.readdirSync(dir, { withFileTypes: true });
+	} catch {
+		return [];
+	}
+
+	const personas: Persona[] = [];
+	for (const entry of entries) {
+		if (!entry.name.endsWith(".md")) continue;
+		if (!entry.isFile() && !entry.isSymbolicLink()) continue;
+		const filePath = path.join(dir, entry.name);
+
+		let content: string;
+		try {
+			content = fs.readFileSync(filePath, "utf-8");
+		} catch {
+			continue; // One unreadable file must not break discovery for the rest.
+		}
+
+		const { frontmatter, body } = parseFrontmatter<PersonaFrontmatter>(content);
+		const name =
+			typeof frontmatter.name === "string" ? frontmatter.name : path.basename(entry.name, ".md");
+		if (!body.trim()) continue;
+
+		personas.push({
+			name,
+			description: typeof frontmatter.description === "string" ? frontmatter.description : "",
+			tools: parseToolList(frontmatter.tools),
+			model: typeof frontmatter.model === "string" ? frontmatter.model : undefined,
+			systemPrompt: body,
+			source,
+			filePath,
+		});
+	}
+	return personas;
+}
+
+function isDirectory(p: string): boolean {
+	try {
+		return fs.statSync(p).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
+function nearestProjectPersonaDir(cwd: string): string | null {
+	let current = cwd;
+	for (;;) {
+		const candidate = path.join(current, CONFIG_DIR_NAME, "agents");
+		if (isDirectory(candidate)) return candidate;
+		const parent = path.dirname(current);
+		if (parent === current) return null;
+		current = parent;
+	}
+}
+
+/**
+ * Personas are re-read on every call so they can be edited mid-session.
+ *
+ * Project personas are only loaded for trusted projects: a persona is an
+ * instruction file that runs with your credentials, so an untrusted repo must
+ * not be able to introduce one.
+ */
+export function discoverPersonas(cwd: string, includeProject: boolean): Persona[] {
+	const user = loadDir(path.join(getAgentDir(), "agents"), "user");
+	const projectDir = includeProject ? nearestProjectPersonaDir(cwd) : null;
+	const project = projectDir ? loadDir(projectDir, "project") : [];
+
+	const byName = new Map<string, Persona>();
+	for (const persona of user) byName.set(persona.name.toLowerCase(), persona);
+	for (const persona of project) byName.set(persona.name.toLowerCase(), persona); // project wins
+	return [...byName.values()];
+}
+
+export function findPersona(personas: Persona[], name: string): Persona | undefined {
+	return personas.find((p) => p.name.toLowerCase() === name.toLowerCase());
+}
+
+export function describePersonas(personas: Persona[]): string {
+	if (personas.length === 0) return "none";
+	return personas.map((p) => `${p.name}${p.description ? ` — ${p.description}` : ""}`).join("; ");
+}
