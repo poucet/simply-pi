@@ -5,6 +5,20 @@ format is stated once in SYSTEM.md §2.
 
 ## Unreleased
 
+#### epoch research: fencing and fast spin-up verdicts · 2026-08-30 · rmluqlnnksxl
+
+`docs/research/epoch/EPOCH.md` measures `../epoch` (CoW checkpointed overlay
+FS) against the two candidate uses and answers no-for-now on both, with the
+evidence: rename(2) arrives at epoch with empty names under the installed
+macFUSE 5.3.1 (so `jj` and editors' atomic saves fail inside any mount),
+symlink/readlink is ENOSYS (which alone breaks this repo's `SYSTEM.md` and
+`.pi/agents`), there is no read-deny mechanism and no export/landing tooling,
+and concurrent mounts cannot share a state store (`DatabaseAlreadyOpen`).
+What is real and worth keeping: 0.25 s mounts independent of tree size,
+containment-by-construction (a wrong write provably never touches the tree),
+and a complete write-audit record via `.vfs/debug/overlay` — a good fit for
+consequence-free scratch lanes once the two POSIX gaps are fixed upstream.
+
 #### Orchestrator prompt head/tail overlays · 2026-08-30 00:08 · nvoslonyvptt
 
 `~/.pi/agent/subagents-orchestrator-head.md` and `-tail.md` now compose
