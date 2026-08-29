@@ -323,8 +323,19 @@ So the main loop defaults to delegating:
 Toggle with `/agents orchestrate off|nudge|strict` (persisted).
 
 The guidance text itself lives in `orchestrator.md` next to the code, re-read every
-turn so edits apply immediately. Drop a `~/.pi/agent/subagents-orchestrator.md` to
-override it without touching the extension.
+turn so edits apply immediately. Three files in `~/.pi/agent/` shape what is
+injected, all re-read every turn:
+
+- `subagents-orchestrator.md` — a wholesale replacement for the bundled prompt.
+  A non-empty copy here still wins over the bundled text, exactly as before.
+- `subagents-orchestrator-head.md` — if non-empty, prepended to the base.
+- `subagents-orchestrator-tail.md` — if non-empty, appended to the base.
+
+The overlays compose around **whichever base is in effect** — your wholesale copy
+if you have one, else the bundled prompt — joined with a blank line: head, base,
+tail. Absent or whitespace-only files contribute nothing, so an overlay needs no
+copy of the guidance it wraps: an identity or role overlay keeps the delegation
+rules it composes with, and the bundled prompt cannot drift out from under it.
 
 ## UI
 

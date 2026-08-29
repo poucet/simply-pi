@@ -246,22 +246,46 @@ function saveSettings(settings: SubagentsSettings): void {
 
 /**
  * Orchestrator guidance lives in `orchestrator.md` next to this file so it can be
- * edited without touching code. A user copy at `~/.pi/agent/subagents-orchestrator.md`
- * overrides it. Re-read on every turn so edits apply without a reload.
+ * edited without touching code. Three files in the agent directory shape what is
+ * injected, all re-read on every turn so edits apply without a reload:
+ *
+ *   - `subagents-orchestrator.md` — a wholesale replacement: a non-empty copy
+ *     here wins over the bundled prompt.
+ *   - `subagents-orchestrator-head.md` — if non-empty, prepended to the base.
+ *   - `subagents-orchestrator-tail.md` — if non-empty, appended to the base.
+ *
+ * The overlays compose around **whichever base won** — the user's wholesale copy
+ * if there is one, else the bundled prompt — joined with a blank line between
+ * the pieces. That is the whole point of them: a role or identity overlay can
+ * add itself to the guidance without duplicating the (drifting) base. Absent or
+ * whitespace-only files contribute nothing; with none of the three in place the
+ * result is exactly the bundled prompt (or empty, if even that is missing).
  */
 const BUNDLED_ORCHESTRATOR_PROMPT = fileURLToPath(new URL("./orchestrator.md", import.meta.url));
 
-function orchestratorPrompt(): string {
-	const userCopy = join(getAgentDir(), "subagents-orchestrator.md");
-	for (const path of [userCopy, BUNDLED_ORCHESTRATOR_PROMPT]) {
-		try {
-			const text = readFileSync(path, "utf-8").trim();
-			if (text) return text;
-		} catch {
-			// Try the next candidate.
-		}
+/** A prompt file, trimmed; an absent or whitespace-only file reads as empty. */
+function readPromptFile(path: string): string {
+	try {
+		return readFileSync(path, "utf-8").trim();
+	} catch {
+		return "";
 	}
-	return "";
+}
+
+function orchestratorPrompt(): string {
+	const dir = getAgentDir();
+	// The base is unchanged from the pre-overlay behaviour: a non-empty wholesale
+	// user copy replaces the bundled prompt, so existing setups behave identically.
+	const base =
+		readPromptFile(join(dir, "subagents-orchestrator.md")) || readPromptFile(BUNDLED_ORCHESTRATOR_PROMPT);
+	// Head and tail compose around whichever base won.
+	return [
+		readPromptFile(join(dir, "subagents-orchestrator-head.md")),
+		base,
+		readPromptFile(join(dir, "subagents-orchestrator-tail.md")),
+	]
+		.filter((piece) => piece !== "")
+		.join("\n\n");
 }
 
 export default function (pi: ExtensionAPI) {
