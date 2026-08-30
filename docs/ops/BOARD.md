@@ -14,7 +14,7 @@ Legend: 🚧 in flight · ✅ landed · ⏸ deferred.
 
 | Status | Date | Pri | Label | What |
 |---|---|---|---|---|
-| 🚧 | 2026-08-29 | P1 | authority | design doc (PROPOSAL): per-role write authority for subagents — ROLE-WRITE-AUTHORITY.md awaits human review (workspace `.workspaces/authority`) |
+| ⏸️ | 2026-08-29 | P1 | authority | design doc (PROPOSAL): per-role write authority for subagents — ROLE-WRITE-AUTHORITY.md awaits human review (workspace `.workspaces/authority`) |
 
 ## Deferred by decision
 
@@ -25,7 +25,7 @@ Legend: 🚧 in flight · ✅ landed · ⏸ deferred.
 | ✅ | 2026-08-30 | P1 | md-mentions | subagents ext: whole-line `@path` mention expansion (fail-silent includes) for persona bodies + the user orchestrator file · snztvzrnutrr |
 | ✅ | 2026-08-30 | P1 | orchestrator-single | subagents ext: orchestrator prompt — one user file (`~/.pi/agent/orchestrator.md`) prepended to the bundled guidance; head/tail overlays and the old wholesale name deleted · xytxyolt |
 | ✅ | 2026-08-30 | P1 | epoch-future | research (docs/research/epoch/EPOCH-FUTURE.md): adoption analysis assuming EPOCH-FIXES lands — mount lanes for export-class work, jj workspaces for chains, audit stream joins the fence calibration · lsyrtqwtyxss |
-| 🚧 | 2026-08-30 | P1 | epoch-docker | research: epoch × Docker composition — container as the containment boundary with only an epoch view of the repo; extends EPOCH-FUTURE.md |
+| ⏸️ | 2026-08-30 | P1 | epoch-docker | research done, HELD AS SIDE-TREE by decision (chain in `.workspaces/epoch-research`; EPOCH-DOCKER.md + EPOCH-FUTURE.md not landed) |
 | 🚧 | 2026-08-30 | P1 | scrollback-bug | bugfix: subagent chat view scrollback shows main content when scrolled past the beginning of the terminal window |
 | ✅ | 2026-08-30 | P1 | epoch-research | research (docs/research/epoch/EPOCH.md): epoch as-it-was — measured verdicts, bench harnesses; not viable as the fence or workspace replacement today · rmluqlnnksxl |
 | ✅ | 2026-08-30 | P1 | orchestrator | subagents ext: head/tail overlay files for the orchestrator prompt · nvoslonyvptt |
