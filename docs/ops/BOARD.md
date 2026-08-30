@@ -15,7 +15,6 @@ Legend: 🚧 in flight · ✅ landed · ⏸ deferred.
 | Status | Date | Pri | Label | What |
 |---|---|---|---|---|
 | 🚧 | 2026-08-29 | P1 | authority | design doc (PROPOSAL): per-role write authority for subagents — ROLE-WRITE-AUTHORITY.md awaits human review (workspace `.workspaces/authority`) |
-| 🚧 | 2026-08-30 | P1 | epoch-fixes | design proposal (PROPOSAL): what epoch must fix — missing semantics, performance goals, audit/security layer — awaits human review (workspace `.workspaces/epoch-research`) |
 
 ## Deferred by decision
 
