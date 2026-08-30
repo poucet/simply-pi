@@ -5,6 +5,26 @@ format is stated once in SYSTEM.md §2.
 
 ## Unreleased
 
+#### Subagent chat owns the wheel: terminal scrollback can no longer show main content · 2026-08-30 01:56 · pkxuprvuwpov
+
+Bug: scrolling up in a subagent chat "past the beginning of the terminal window"
+showed content from the MAIN conversation — the overlay seemed to stop covering
+the terminal. Root cause was neither a short frame nor escaping keys: the render
+is exactly `terminal.rows` tall in every state and keyboard scroll keys are
+fully consumed at the boundary (both verified against the real `TuiMainScreen`).
+In pi's default regular TUI mode the main screen owns no mouse and leaves
+scrolling to the terminal's **native scrollback**, which holds the whole main
+conversation above the overlay's frame; wheeling up slid the terminal's viewport
+into it, where the overlay does not exist. Fix: `captureWheel` enables button
+reporting + SGR (`?1000h`/`?1006h`) while the chat or notes overlay is up
+(regular mode only — the alt screen owns the mouse in fullscreen), and both
+overlays' `handleInput` now parse SGR/X10 wheel events (pi's own semantics) and
+route them to the pane — which also makes wheel scrolling work in fullscreen
+mode, where the events were previously dropped. Clicks are consumed harmlessly;
+native selection falls back to the terminal's shift-bypass while a chat is open.
+8 new tests in tests/chat-view.test.ts (frame-height contract incl. resize,
+boundary consumption, wheel routing, capture lifecycle); gate 631 pass.
+
 #### `@path` mention expansion for markdown prompts · 2026-08-30 00:58 · snztvzrnutrr
 
 Persona bodies and the user orchestrator file (`~/.pi/agent/orchestrator.md`)
