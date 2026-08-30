@@ -455,6 +455,7 @@ shadowed pi's own `app.editor.external` binding, so it was removed.
 | `↓` | into the switcher strip, while the input box is empty |
 | `pgup` / `pgdn`, `shift+↑` / `shift+↓` | scroll |
 | `↑` | scroll up one line, while the input box is empty |
+| mouse wheel / trackpad | scroll — the pane owns the wheel while it is open |
 | `home` / `end` | top / follow the live end (input box empty) |
 | `enter` | send to this child — steers it mid-turn, prompts it when idle |
 | `esc` | leave the strip, or (from the input) back to the main chat |
@@ -611,7 +612,7 @@ viewport is scrolled by the pane itself — see below.
 
 ### Platform constraints (verified against pi's TUI source — do not re-litigate)
 
-Two things about overlays are settled. Both were re-derived the expensive way
+Three things about overlays are settled. All were re-derived the expensive way
 once already; the findings are recorded here so the next person does not.
 
 **1. There is no root-tree or scroll-region API. Manual viewport slicing is the
@@ -670,9 +671,24 @@ that holds focus, so a real modal stacked on top of the pane still gets the
 keyboard. `nonCapturing` is deliberately **not** passed to `showOverlay` — that
 flag opts out of the very focus this depends on.
 
+**The wheel is a third, mode-dependent problem.** In regular TUI mode pi
+enables no mouse reporting at all, so the wheel scrolls the terminal's *native*
+scrollback — which holds the main conversation above the overlay's frame, so
+scrolling "past the beginning of the terminal window" shows main content under
+the pane. `captureWheel` in `chat-view.ts` turns on button reporting with SGR
+encoding (`?1000h`/`?1006h`) while the pane (or the notes overlay) is up and
+resets it on close, so the wheel reaches the pane's `handleInput` instead of
+moving the terminal; clicks and drags are consumed with no effect, and native
+selection/link-clicking falls back to the terminal's usual shift-bypass — the
+same trade fullscreen mode makes. In fullscreen mode no DECSETs are touched
+(`TuiAltScreen` owns the mouse for the session), but its scroller defers wheel
+events to the focused overlay, so the same handler routes them there too,
+where they used to be dropped.
+
 Regression coverage is in `tests/focus.test.ts`, which drives the real
 `TuiAltScreen` rather than a mock, since the entire question is what pi's own
-machinery does with focus.
+machinery does with focus. The wheel and render-height contracts are pinned in
+`tests/chat-view.test.ts`.
 
 ## Configuration
 

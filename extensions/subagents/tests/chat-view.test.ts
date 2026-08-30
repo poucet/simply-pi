@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ChatPaneRegistry } from "../chat-pane.ts";
-import { SubagentChatView, switcherLines } from "../chat-view.ts";
+import { SubagentChatView, TextOverlay, captureWheel, switcherLines } from "../chat-view.ts";
 import { SwitcherStrip } from "../switcher.ts";
 import type { ChatHost, ManagedAgent } from "../types.ts";
 
@@ -26,6 +26,13 @@ const TAB = "\t";
 const theme: any = {
 	fg: (color: string, text: string) => (color === "accent" ? `<${text}>` : text),
 	bg: (_color: string, text: string) => `[${text}]`,
+	bold: (text: string) => text,
+};
+
+/** A flat theme for the scroll-contract tests (no markup in the frame). */
+const flatTheme: any = {
+	fg: (_color: string, text: string) => text,
+	bg: (_color: string, text: string) => text,
 	bold: (text: string) => text,
 };
 
@@ -176,4 +183,147 @@ test("the banner names every blocked child and is absent when none are", () => {
 	delete (one as any).pendingQuestion;
 	delete (two as any).pendingQuestion;
 	assert.doesNotMatch(switcherLines(host, theme, strip).join("\n"), /blocked on your answer/);
+});
+
+// --- scrollback: the overlay must own its viewport --------------------------
+
+const PAGE_UP = "\x1b[5~";
+const UP = "\x1b[A";
+/** SGR wheel: button 64 = wheel up, 65 = wheel down. */
+const WHEEL_UP = "\x1b[<64;10;10M";
+const WHEEL_DOWN = "\x1b[<65;10;10M";
+/** Legacy X10 wheel up: ESC [ M then three bytes offset by 32. */
+const X10_WHEEL_UP = "\x1b[M" + String.fromCharCode(32 + 64, 32 + 10, 32 + 10);
+/** An SGR left-click, so we can prove clicks are consumed harmlessly. */
+const CLICK = "\x1b[<0;10;10M";
+
+/**
+ * A view over a pane whose content is `lines` rows tall, on a terminal of
+ * `rows` rows that records everything written to it.
+ */
+function scrollHarness(rows: number, contentLines = 0) {
+	const writes: string[] = [];
+	const tui: any = {
+		mode: "regular",
+		requestRender() {},
+		terminal: { rows, columns: 80, write: (data: string) => writes.push(data) },
+	};
+	const agents = [agent("id-a", "alpha")];
+	const host: ChatHost = {
+		agents: () => agents,
+		unread: () => 0,
+		statusIcon: () => "◐",
+		subscribe: () => () => {},
+		send: async () => {},
+	};
+	const registry = new ChatPaneRegistry(tui, host.subscribe, () => {});
+	const view = new SubagentChatView(tui, flatTheme, host, registry, () => {}, "id-a");
+	const pane = registry.get(agents[0]!);
+	// Enough content that the pane can genuinely scroll.
+	for (let i = 0; i < contentLines; i++) pane.content.addChild({ render: () => [`line ${i}`] });
+	return { tui, view, pane, writes };
+}
+
+test("the frame is exactly as tall as the terminal, whatever the content", () => {
+	// A long conversation, a short one and an empty one must all paint every
+	// row: any row the overlay does not paint is a row of main chat showing
+	// through the composite (the original bug report).
+	assert.equal(scrollHarness(24, 100).view.render(80).length, 24);
+	assert.equal(scrollHarness(24, 3).view.render(80).length, 24);
+	assert.equal(scrollHarness(24, 0).view.render(80).length, 24);
+	// A taller or shorter terminal after a resize must be covered too.
+	const tall = scrollHarness(24, 100);
+	tall.tui.terminal.rows = 40;
+	assert.equal(tall.view.render(80).length, 40);
+	tall.tui.terminal.rows = 12;
+	assert.equal(tall.view.render(80).length, 12);
+	// Below the floor the frame stays 8 rows (the compositor clamps it).
+	assert.equal(scrollHarness(5, 100).view.render(80).length, 8);
+});
+
+test("scroll keys at the top are consumed and never scroll past the beginning", () => {
+	const { view, pane } = scrollHarness(24, 100);
+	// PageUp by more than the content: clamped at zero, not negative.
+	view.handleInput(PAGE_UP);
+	view.handleInput(PAGE_UP);
+	assert.equal(pane.scrollTop, 0);
+	// The up arrow with an empty input box is a scroll key too.
+	view.handleInput(UP);
+	assert.equal(pane.scrollTop, 0);
+	// And the wheel at the top does not go negative either.
+	view.handleInput(WHEEL_UP);
+	assert.equal(pane.scrollTop, 0);
+});
+
+test("the wheel scrolls the pane, in both SGR and legacy encodings", () => {
+	const { view, pane } = scrollHarness(24, 100);
+	view.handleInput(WHEEL_DOWN);
+	view.handleInput(WHEEL_DOWN);
+	assert.equal(pane.scrollTop, 2);
+	assert.equal(pane.followEnd, false);
+	view.handleInput(WHEEL_UP);
+	assert.equal(pane.scrollTop, 1);
+	view.handleInput(X10_WHEEL_UP);
+	assert.equal(pane.scrollTop, 0);
+});
+
+test("mouse reports other than the wheel are consumed without side effects", () => {
+	const { view } = scrollHarness(24, 100);
+	view.handleInput(CLICK);
+	assert.equal(view.render(80).length, 24, "a click must not disturb the frame");
+	// The click sequence must not have been typed into the editor either.
+	view.handleInput("x");
+	assert.ok(view.render(80).some((line) => line.includes("x")), "the typed x must be in the frame");
+});
+
+test("captureWheel owns the mouse in regular mode and gives it back on release", () => {
+	const { tui, writes } = scrollHarness(24);
+	const release = captureWheel(tui);
+	assert.deepEqual(writes, ["\x1b[?1000h\x1b[?1006h"]);
+	release();
+	// Idempotent: a double release writes the reset once.
+	release();
+	assert.deepEqual(writes, ["\x1b[?1000h\x1b[?1006h", "\x1b[?1000l\x1b[?1006l"]);
+});
+
+test("captureWheel never touches the mouse in fullscreen mode or unknown TUIs", () => {
+	// The alt screen owns mouse reporting for the whole session; resetting it
+	// from an overlay would break the session's input.
+	const fullscreen: any = { mode: "fullscreen", terminal: { write() {} } };
+	captureWheel(fullscreen)();
+	const unknown: any = { terminal: { write() {} } };
+	captureWheel(unknown)();
+	// A TUI without a writable terminal must not crash either.
+	captureWheel({ mode: "regular" })();
+});
+
+test("switching chats never leaves two wheel captures fighting over the mouse", () => {
+	// Same overlap as the focus hold: pane B opens before pane A's close
+	// resolves, so A's release runs after B's capture. The second capture must
+	// release the first rather than leaving two writers on the DECSETs.
+	const { tui, writes } = scrollHarness(24);
+	const releaseA = captureWheel(tui);
+	const releaseB = captureWheel(tui);
+	assert.deepEqual(writes, [
+		"\x1b[?1000h\x1b[?1006h", // A captures
+		"\x1b[?1000l\x1b[?1006l", // A is released by B's capture
+		"\x1b[?1000h\x1b[?1006h", // B captures
+	]);
+	releaseA(); // already stopped: must not reset B's capture
+	assert.deepEqual(writes, ["\x1b[?1000h\x1b[?1006h", "\x1b[?1000l\x1b[?1006l", "\x1b[?1000h\x1b[?1006h"]);
+	releaseB();
+	assert.deepEqual(writes.at(-1), "\x1b[?1000l\x1b[?1006l");
+});
+
+test("the notes overlay wheels too, and never scrolls above its first line", () => {
+	const tui: any = { requestRender() {}, terminal: { rows: 24, columns: 80 } };
+	const overlay = new TextOverlay(tui, flatTheme, "notes", "line one\nline two\nline three");
+	const before = overlay.render(80).length;
+	overlay.handleInput(X10_WHEEL_UP);
+	overlay.handleInput(X10_WHEEL_UP);
+	// Clamped at the top: the frame must be unchanged rather than revealing
+	// anything beneath, and a click must be consumed without effect.
+	assert.equal(overlay.render(80).length, before);
+	overlay.handleInput(CLICK);
+	assert.equal(overlay.render(80).length, before);
 });

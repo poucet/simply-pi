@@ -26,6 +26,23 @@
  * up. Once focus lands on the editor, `pageUp` is eaten by the scroller and the
  * *main* transcript moves under our pane. Claiming keys in `handleInput` cannot
  * fix that — we never receive them. Holding focus is the only mechanism.
+ *
+ * Why the wheel is ours too (`captureWheel` below): pi's default "regular" TUI
+ * mode renders on the main screen and deliberately leaves scrolling to the
+ * *terminal's* native scrollback — it enables no mouse reporting there (only
+ * `TuiAltScreen` sends `?1000h/?1006h`). The whole main conversation therefore
+ * lives in the scrollback above the viewport, while an overlay is composited
+ * over only the last `terminal.rows` rows (tui.js `compositeOverlays`). Scrolling
+ * the terminal up "past the beginning of the terminal window" — wheel or
+ * trackpad — slides the viewport into that scrollback, where this overlay does
+ * not exist: the main conversation shows above the pane, which reads as "the
+ * overlay stopped covering the terminal". Enabling button reporting with SGR
+ * encoding while we are up makes the terminal deliver wheel events to the app
+ * instead of scrolling, and `handleInput` turns them into pane scrolls. In
+ * fullscreen mode the alt screen already owns the mouse, so no DECSETs are
+ * touched there — but its scroller defers wheel to the focused overlay
+ * (tui-alt-screen.js:428), so the same `handleInput` code routes those events
+ * too, where they used to die on the floor.
  */
 
 import type { ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
@@ -77,6 +94,39 @@ function humanDuration(ms: number): string {
 
 export function formatCost(cost: number): string {
 	return cost >= 0.01 ? `$${cost.toFixed(2)}` : `$${cost.toFixed(4)}`;
+}
+
+/**
+ * A wheel event, in pi's own encoding (`TuiAltScreen.parseWheelEvent`):
+ * -1 scrolls the content up, +1 scrolls it down, `undefined` is not a wheel.
+ *
+ * Regular-mode terminals only send these once `captureWheel` has turned on
+ * button reporting; the fullscreen TUI sends them because its scroller defers
+ * them to the focused overlay — us.
+ */
+function parseWheelEvent(data: string): number | undefined {
+	const sgr = /^\x1b\[<(\d+);(\d+);(\d+)[Mm]$/.exec(data);
+	if (sgr) {
+		const button = Number.parseInt(sgr[1]!, 10);
+		if ((button & 64) === 0) return undefined; // not a wheel button
+		const direction = button & 3;
+		if (direction !== 0 && direction !== 1) return undefined;
+		return direction === 0 ? -1 : 1;
+	}
+	// Legacy X10 encoding: `ESC [ M` followed by three raw bytes.
+	if (data.length === 6 && data.startsWith("\x1b[M")) {
+		const button = data.charCodeAt(3) - 32;
+		if ((button & 64) === 0) return undefined;
+		const direction = button & 3;
+		if (direction !== 0 && direction !== 1) return undefined;
+		return direction === 0 ? -1 : 1;
+	}
+	return undefined;
+}
+
+/** Any mouse report (SGR or legacy X10), wheel or not. */
+function isMouseReport(data: string): boolean {
+	return /^\x1b\[<\d+;\d+;\d+[Mm]$/.test(data) || (data.length === 6 && data.startsWith("\x1b[M"));
 }
 
 /**
@@ -238,6 +288,15 @@ export class SubagentChatView implements Component, Focusable {
 	handleInput(data: string): void {
 		const editorBusy = this.editor.isShowingAutocomplete();
 
+		// The wheel is pointer input, so it outranks whatever the keyboard focus
+		// is doing — it must move the pane in both TUI modes (see the module
+		// header), never the terminal's own scrollback or the main transcript.
+		const wheel = parseWheelEvent(data);
+		if (wheel !== undefined) return this.scroll(wheel);
+		// Clicks and drags arrive too, once button reporting is on; there is
+		// nothing to do with them, but they must not reach the editor either.
+		if (isMouseReport(data)) return;
+
 		// Cooperative focus: anything the strip does not want — a printable
 		// character, or a key that belongs to the pane — falls through below.
 		if (this.strip.focused && this.strip.handleKey(data) === "consumed") {
@@ -389,6 +448,58 @@ export class SubagentChatView implements Component, Focusable {
  */
 let activeFocusHold: (() => void) | undefined;
 
+let activeWheelCapture: (() => void) | undefined;
+
+/**
+ * Own the mouse wheel for as long as a full-screen overlay is up (regular mode).
+ *
+ * In regular mode pi enables no mouse reporting, so the wheel scrolls the
+ * terminal's *native* scrollback — which is the main conversation above the
+ * overlay's frame, the exact bug this guards against (see the module header).
+ * Turning on button reporting (`?1000h`) with SGR encoding (`?1006h`) makes the
+ * terminal deliver wheel events to the app instead of scrolling; the overlay's
+ * `handleInput` then routes them to the pane. Click-drag selection and terminal
+ * link clicking fall back to the terminal's usual shift-bypass while a chat is
+ * open, the same trade fullscreen mode makes.
+ *
+ * Fullscreen mode must not touch the DECSETs: `TuiAltScreen` owns mouse
+ * reporting for the whole session there, and resetting it would break the
+ * session's input. Wheel events still arrive — the alt screen's scroller defers
+ * them to the focused overlay — so `handleInput` works unmodified in both
+ * modes. A TUI that reports neither mode (a test double, a future third mode)
+ * is treated as not ours to reconfigure.
+ *
+ * Same single-instance discipline as `keepFocus`: switching chats opens the
+ * next overlay before the previous close resolves, so a second capture releases
+ * the first rather than leaving two writers fighting over the DECSETs.
+ */
+export function captureWheel(tui: TUI): () => void {
+	if ((tui as { mode?: string }).mode !== "regular") return () => {};
+
+	let stopped = false;
+	const write = (sequence: string): void => {
+		try {
+			(tui.terminal as { write?: (data: string) => void }).write?.(sequence);
+		} catch {
+			/* a torn-down terminal has already forgotten us */
+		}
+	};
+
+	/** Idempotent, and safe to call after the terminal is gone. */
+	function release(): void {
+		if (stopped) return;
+		stopped = true;
+		if (activeWheelCapture === release) activeWheelCapture = undefined;
+		write("\x1b[?1000l\x1b[?1006l");
+	}
+
+	// Never leave two captures live; the previous overlay may already be gone.
+	activeWheelCapture?.();
+	activeWheelCapture = release;
+	write("\x1b[?1000h\x1b[?1006h");
+	return release;
+}
+
 export function keepFocus(tui: TUI, component: Component): () => void {
 	const anyTui = tui as any;
 	let stopped = false;
@@ -504,6 +615,7 @@ export async function openSubagentChat(
 	startAgentId?: string,
 ): Promise<void> {
 	let releaseFocus: (() => void) | undefined;
+	let releaseWheel: (() => void) | undefined;
 	try {
 		await ui.custom<void>(
 			(tui, theme, _keybindings, done) => {
@@ -518,6 +630,7 @@ export async function openSubagentChat(
 				// Deliberately *not* `nonCapturing`: that flag opts out of the very
 				// focus that makes pi's scroller defer to us.
 				releaseFocus = keepFocus(tui, view);
+				releaseWheel = captureWheel(tui);
 				return view;
 			},
 			{
@@ -526,13 +639,15 @@ export async function openSubagentChat(
 			},
 		);
 	} finally {
+		releaseWheel?.();
 		releaseFocus?.();
 	}
 }
 
 // ------------------------------------------------------------------ notes ---
 
-class TextOverlay implements Component {
+/** The shared-notes overlay component; exported for tests. */
+export class TextOverlay implements Component {
 	private scrollTop = 0;
 	private body: Markdown;
 
@@ -547,6 +662,14 @@ class TextOverlay implements Component {
 	}
 
 	handleInput(data: string): void {
+		// Same wheel ownership as the chat pane — see the module header.
+		const wheel = parseWheelEvent(data);
+		if (wheel !== undefined) {
+			this.scrollTop = Math.max(0, this.scrollTop + wheel);
+			this.tui.requestRender();
+			return;
+		}
+		if (isMouseReport(data)) return;
 		const page = Math.max(1, this.tui.terminal.rows - 4);
 		if (matchesKey(data, Key.escape) || data === "q") return this.done();
 		if (matchesKey(data, Key.up)) this.scrollTop = Math.max(0, this.scrollTop - 1);
@@ -585,11 +708,13 @@ export async function openTextOverlay(
 	// Scrolls with the same keys as the chat pane, so it needs the same focus
 	// guard — see `keepFocus`.
 	let releaseFocus: (() => void) | undefined;
+	let releaseWheel: (() => void) | undefined;
 	try {
 		await ui.custom<void>(
 			(tui, theme, _keybindings, done) => {
 				const overlay = new TextOverlay(tui, theme, title, text, () => done(undefined));
 				releaseFocus = keepFocus(tui, overlay);
+				releaseWheel = captureWheel(tui);
 				return overlay;
 			},
 			{
@@ -598,6 +723,7 @@ export async function openTextOverlay(
 			},
 		);
 	} finally {
+		releaseWheel?.();
 		releaseFocus?.();
 	}
 }
