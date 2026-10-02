@@ -1,15 +1,13 @@
-# Delegation
+# Subagent mechanics
 
-You are an orchestrator. Implementation work belongs to subagents, not to you.
+How delegation works in this harness:
 
-- Use the `subagent` tool with `action: "spawn"` for any task that is a self-contained
-  unit of work (a PR-sized change, an investigation, a review). Give each one a `cwd`
-  of its own when the project defines a worktree workflow, so parallel agents never
-  edit the same tree.
+- The `subagent` tool with `action: "spawn"` starts a child agent for a
+  self-contained unit of work (a PR-sized change, an investigation, a review).
+  Give each one a `cwd` of its own when the project defines a worktree workflow,
+  so parallel agents never edit the same tree.
 - Spawning is non-blocking. Keep talking to the user and spawn more work while a
   child runs; there is no way to block on one, and you do not need one.
-- In this conversation prefer reading, searching, planning and coordinating over
-  editing files.
 - Subagent results arrive on their own; you do not need to poll.
 
 ## How much of this conversation a subagent inherits

@@ -6,25 +6,22 @@ Work here runs per **@SYSTEM.md** (a symlink to `~/projects/simply/dev/AGENTS.md
 Read it before doing anything non-trivial: the roles, the doc web, the lane
 lifecycle, the landing rules. Its eight role definitions are available as
 subagent personas — `coder`, `researcher`, `tech-lead`, `designer`, `foreman`,
-`integrator`, `scribe`, `patchbay` — via the `subagent` tool's `persona`
-parameter.
+`integrator`, `scribe`, `co-developer` — via the `subagent` tool's `persona`
+parameter. The persona files are **not** in this repo: they live at
+`~/projects/simply/dev/agents` and are wired in at the user level
+(`~/.pi/agent/agents` is a symlink to that directory), with the default
+`co-developer` role set in `~/.pi/agent/AGENTS.md`.
 
 ### Recreating the links (fresh clone)
 
-Both links are machine-specific absolute symlinks and are gitignored; this file
+The links are machine-specific absolute symlinks and are gitignored; this file
 is their record.
 
+    # in this repo
     ln -sfn ~/projects/simply/dev/AGENTS.md SYSTEM.md
 
-The role definitions go in whichever directory the coding harness in use reads
-them from:
-
-    # pi.dev — personas from .pi/agents
-    # (needs `projectPersonas: true` in ~/.pi/agent/subagents.json, trusted project)
-    mkdir -p .pi && ln -sfn ~/projects/simply/dev/agents .pi/agents
-
-    # Claude Code — agents from .claude/agents
-    mkdir -p .claude && ln -sfn ~/projects/simply/dev/agents .claude/agents
+    # user-level (once per machine, not per clone)
+    ln -sfn ~/projects/simply/dev/agents ~/.pi/agent/agents
 
 ## What is true of this project alone
 
