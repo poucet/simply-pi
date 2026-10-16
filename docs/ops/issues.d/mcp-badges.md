@@ -1,0 +1,6 @@
+# issues.d — mcp-badges · 2026-10-02 19:09 · yznrqpnpnmpt
+
+| Status | Found | What | Verdict |
+|---|---|---|---|
+| open | 2026-10-02 | subagents badge bar loses the editor's scroll indicator *and* its badges under pi 1.0.0: `SCROLL_INDICATOR` in `extensions/subagents/badge-bar.ts` matches pi's old left-anchored `─── ↑ N more ───` indicator, but pi now centers it (`──────── ↑ 13 more ────────`), so `borderSlot` never matches and the bar bails. Two tests fail on clean main (`editor.test.ts`: "a scrolled top border keeps its indicator and its badges", "a themed scroll indicator is re-painted, never sliced"). Pre-exists this lane (verified at `uoloonwu`); the fix touches the bar's lead/width composition and its tests, not a regex alone. | needs its own lane |
+| open | 2026-10-02 | `PI_SUBAGENT_MCP` (child MCP server allowlist, `extensions/shared/mcp-scope.ts`) has no consumer any more: the old `extensions/mcp/config.ts` honored it and is deleted with the move to pi's builtin MCP, which does not know the variable. `extensions/subagents` still sets it for children — harmless but dead. Children now boot whatever the builtin's `mcp.json` says, unscoped. | decide: teach children scoping another way (builtin config override?) or delete the scope plumbing |

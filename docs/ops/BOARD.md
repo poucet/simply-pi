@@ -22,6 +22,7 @@ Legend: 🚧 in flight · ✅ landed · ⏸ deferred.
 
 | Status | Date | Pri | Label | What |
 |---|---|---|---|---|
+| ✅ | 2026-10-02 | P1 | mcp-badges | mcp ext rewritten as a read-only badges overlay for pi's builtin MCP — client/OAuth/config/`/mcp` deleted, `observe.ts` derives state from mcp.json + `getMcpServers()` + `mcp__*` tool namespaces · yznrqpnpnmpt |
 | ✅ | 2026-08-30 | P1 | scrollback-bug | subagents ext: chat overlay owns the wheel — mouse capture (regular mode) + wheel routing in both TUI modes, so terminal scrollback can no longer show main content under the pane · pkxuprvuwpov |
 | ✅ | 2026-08-30 | P1 | md-mentions | subagents ext: whole-line `@path` mention expansion (fail-silent includes) for persona bodies + the user orchestrator file · snztvzrnutrr |
 | ✅ | 2026-08-30 | P1 | orchestrator-single | subagents ext: orchestrator prompt — one user file (`~/.pi/agent/orchestrator.md`) prepended to the bundled guidance; head/tail overlays and the old wholesale name deleted · xytxyolt |

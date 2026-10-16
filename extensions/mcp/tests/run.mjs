@@ -1,5 +1,5 @@
 /**
- * Test runner for the MCP extension.
+ * Test runner for the MCP badges extension.
  *
  * The extension is TypeScript that pi loads through jiti; node's native
  * strip-only TypeScript support cannot load everything in this repo, so the
@@ -18,23 +18,18 @@ import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
-// `config.ts` resolves the disabled-servers state file from `homedir()` at
-// import time, and `loadMcpConfig` reads `~/.pi/agent/mcp.json`. Redirect HOME
+// The extension reads the builtin's config from `getAgentDir()`, which is
+// `$PI_CODING_AGENT_DIR` or `~/.pi/agent`. Point both at scratch directories
 // for the whole suite — before jiti loads anything — so no test can read the
-// developer's real servers or write their real state file. `PI_MCP_CONFIG` is
-// cleared for the same reason; tests that want a config set it themselves.
+// developer's real `mcp.json`. Tests that want a config write their own agent
+// dir and set `PI_CODING_AGENT_DIR` themselves.
 process.env.HOME = mkdtempSync(path.join(tmpdir(), "pi-mcp-tests-home-"));
-delete process.env.PI_MCP_CONFIG;
+process.env.PI_CODING_AGENT_DIR = mkdtempSync(path.join(tmpdir(), "pi-mcp-tests-agent-"));
 
-// The suite may itself be running inside a subagent, where `loadMcpConfig`
-// correctly narrows the servers to that child's scope and `saveDisabledServers`
-// correctly refuses to write. Both are the *child* behaviour, and the tests here
-// assert the parent's unless they opt in — so without this every server-visibility
-// assertion fails, and only when the suite is run from a delegated agent. Same
-// reasoning, and the same trap, as `extensions/subagents/tests/run.mjs`.
-delete process.env.PI_SUBAGENT;
-delete process.env.PI_SUBAGENT_NAME;
-delete process.env.PI_SUBAGENT_MCP;
+// `POLL_MS` is read once, at module import. The default two seconds is right
+// for a session and hopeless for a test suite, so the poll tests get a fast
+// clock before jiti loads `index.ts`.
+process.env.PI_MCP_BADGE_POLL_MS = "25";
 
 /** Locate the installed pi package, whose node_modules we borrow. */
 function piPackageRoot() {

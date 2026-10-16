@@ -1,11 +1,12 @@
 /**
  * The MCP footer line.
  *
- * The `/mcp` command answers "what is going on with my servers?" in full, but
+ * pi's built-in `/mcp` answers "what is going on with my servers?" in full, but
  * only when you ask. Connecting to a remote server takes seconds, servers fail
- * quietly, and `/mcp disable` changes what the model can see — none of which is
- * visible unless something durable says so. `ctx.ui.setStatus("mcp", …)` is that
- * durable place, and this module decides what it says.
+ * quietly, and disabling one changes what the model can see — none of which is
+ * visible unless something durable says so. The border badge bar and
+ * `ctx.ui.setStatus("mcp", …)` are that durable place, and this module decides
+ * what it says.
  *
  * It says it twice. `statusBadges` is the form a terminal gets — a row of
  * coloured chips, because the footer is scanned rather than read and a chip is
@@ -15,12 +16,20 @@
  * so the two can never end up disagreeing about whether a server failed.
  *
  * Kept pure (no pi imports, no clients, no terminal) so every state is testable
- * headlessly; `index.ts` only maps its live `ServerState`s onto `StatusServer`,
- * and owns the tone → theme-token mapping, which is the only part that needs a
- * terminal to mean anything.
+ * headlessly; `observe.ts` derives the `StatusServer`s from what pi's builtin
+ * lets an extension see, and `index.ts` owns the tone → theme-token mapping,
+ * which is the only part that needs a terminal to mean anything.
  */
 
-/** Lifecycle of one server, mirroring `ServerState["status"]` in index.ts. */
+/**
+ * Lifecycle of one server. The full vocabulary is kept, but since the move to
+ * pi's built-in MCP only "disabled", "connecting" and "ready" are ever produced:
+ * the builtin exposes no failure or auth state to extensions, so `observe.ts`
+ * cannot distinguish a failed or login-blocked server from one still dialling
+ * (see its header). "error" and "needs auth" stay so the vocabulary — and the
+ * renderings below, which are pure and tested — are ready the day pi exposes
+ * the facts.
+ */
 export type StatusPhase = "connecting" | "ready" | "error" | "disabled" | "needs auth";
 
 /** The only thing the footer needs to know about a server. */
@@ -114,8 +123,8 @@ function trailingParts(counts: StatusCounts, includeOff: boolean): StatusBadge[]
 	}
 	if (counts.failed > 0) parts.push({ text: `${counts.failed} failed`, tone: "error" });
 	// Needing a login is a warning, not an error: nothing is broken and the fix is
-	// a command away. `index.ts` already draws the same distinction when it
-	// notifies about these two, and the footer should not contradict it.
+	// a command away. pi's builtin draws the same distinction in `/mcp`, and the
+	// footer should not contradict it.
 	if (counts.needsAuth > 0) {
 		parts.push({ text: `${counts.needsAuth} need${counts.needsAuth === 1 ? "s" : ""} login`, tone: "warn" });
 	}
@@ -129,7 +138,7 @@ function trailingParts(counts: StatusCounts, includeOff: boolean): StatusBadge[]
  * The disabled server stays *out* of the ratio — it is `2/2·1`, never `2/3`.
  * The ratio means "of the servers that should be up, how many are", which is
  * exactly what makes anything below `N/N` a reliable at-a-glance "something is
- * wrong"; moving a deliberate `/mcp disable` into the denominator would make a
+ * wrong"; moving a deliberately disabled server into the denominator would make a
  * choice the user made look like a failure. The count is appended rather than
  * merged for that reason: it is a different kind of fact, so it gets its own
  * position and its own separator instead of quietly changing what `/` counts.
@@ -242,7 +251,7 @@ export function formatStatus(servers: readonly StatusServer[]): string | undefin
 	const counts = countServers(servers);
 
 	// Nothing but switched-off servers: still worth a word (their tools are
-	// missing on purpose, and `/mcp enable` is how you get them back), but only
+	// missing on purpose, and `/mcp` is where you turn them back on), but only
 	// if the user actually configured something.
 	if (counts.configured === 0) {
 		return counts.off > 0 ? `mcp: ${counts.off} off` : undefined;
