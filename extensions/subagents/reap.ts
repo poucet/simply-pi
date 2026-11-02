@@ -1,8 +1,8 @@
 /**
  * Deciding which finished children to let go of.
  *
- * Nothing used to tell the parent that a completed child still holds one of six
- * slots, so finished agents accumulated until something wiped them. `/reload`
+ * Nothing used to tell the parent that a completed child still holds one of the
+ * `maxOpenAgents` slots, so finished agents accumulated until something wiped them. `/reload`
  * did that wiping, which is exactly why the problem stayed invisible — and why
  * it becomes load-bearing the moment agents survive a reload (see hibernate.ts).
  *

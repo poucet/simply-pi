@@ -328,8 +328,8 @@ test("hibernateAll stops the processes but keeps the agents restorable", async (
 test("reviving respects the process cap without counting the agent itself", async () => {
 	const f = fixture();
 	try {
-		// Six other children already hold process slots.
-		for (let i = 0; i < 6; i += 1) {
+		// A full table of other children already holds every process slot.
+		for (let i = 0; i < f.manager.maxOpenAgents; i += 1) {
 			const [other] = f.manager.restore([
 				{
 					id: `other-${i}`,

@@ -41,7 +41,13 @@ import {
 import { isSubagentBoot, sessionIdentity } from "./identity.ts";
 import type { MailKind } from "./mailbox.ts";
 import { expandMentions } from "./mentions.ts";
-import { SubagentManager, onDeadlineExceeded } from "./manager.ts";
+import {
+	DEFAULT_MAX_OPEN_AGENTS,
+	type ManagerConfig,
+	SubagentManager,
+	onDeadlineExceeded,
+	parseMaxOpenAgents,
+} from "./manager.ts";
 import {
 	DEFAULT_AUTO_RESTORE_MAX_AGE_MINUTES,
 	Registry,
@@ -126,6 +132,12 @@ interface SubagentsSettings {
 	 * same pile at every launch. `0` removes the bound. See `registry.ts`.
 	 */
 	autoRestoreMaxAgeMinutes: number;
+	/**
+	 * How many children may hold a process at once. Hibernated children do not
+	 * count. A whole number from 1 to `MAX_OPEN_AGENTS_CEILING`; anything else
+	 * falls back to the default with a warning. See `parseMaxOpenAgents`.
+	 */
+	maxOpenAgents: number;
 }
 
 const DEFAULT_SETTINGS: SubagentsSettings = {
@@ -140,7 +152,21 @@ const DEFAULT_SETTINGS: SubagentsSettings = {
 	autoResumeMaxAgeMinutes: DEFAULT_AUTO_RESUME_MAX_AGE_MINUTES,
 	maxResumeAttempts: DEFAULT_MAX_RESUME_ATTEMPTS,
 	autoRestoreMaxAgeMinutes: DEFAULT_AUTO_RESTORE_MAX_AGE_MINUTES,
+	maxOpenAgents: DEFAULT_MAX_OPEN_AGENTS,
 };
+
+/** The part of the settings the manager reads, shared by its construction and every `setConfig`. */
+function managerSettings(settings: SubagentsSettings): ManagerConfig {
+	return {
+		childDeny: settings.childDeny,
+		childMcpServers: settings.childMcpServers,
+		stallSeconds: settings.stallSeconds,
+		idleHibernateMinutes: settings.idleHibernateMinutes,
+		autoResumeMaxAgeMinutes: settings.autoResumeMaxAgeMinutes,
+		maxResumeAttempts: settings.maxResumeAttempts,
+		maxOpenAgents: settings.maxOpenAgents,
+	};
+}
 
 /**
  * What the `list` action says about agents this session did *not* adopt.
@@ -200,6 +226,7 @@ function loadSettings(): SubagentsSettings {
 				raw.autoRestoreMaxAgeMinutes >= 0
 					? raw.autoRestoreMaxAgeMinutes
 					: DEFAULT_SETTINGS.autoRestoreMaxAgeMinutes,
+			maxOpenAgents: parseMaxOpenAgents(raw?.maxOpenAgents).value,
 			childDeny: parseDenyList(raw?.childDeny),
 			// Deliberately *not* named `childMcp`. That key existed, meant something
 			// else (whether a child got the MCP extension at all), and is still
@@ -230,11 +257,19 @@ const OBSOLETE_SETTINGS: Record<string, string> = {
 	childMcp: "use childMcpServers to choose which MCP servers a child boots",
 };
 
-/** Obsolete keys actually present in the user's config, for a one-time warning. */
-function obsoleteSettingKeys(): string[] {
+/**
+ * What is wrong with the user's config, for a one-time warning: keys that no
+ * longer do anything, and values that were ignored in favour of the default.
+ */
+function settingWarnings(): string[] {
 	try {
 		const raw = JSON.parse(readFileSync(settingsPath(), "utf-8")) as Record<string, unknown>;
-		return Object.keys(OBSOLETE_SETTINGS).filter((key) => raw?.[key] !== undefined);
+		const warnings = Object.keys(OBSOLETE_SETTINGS)
+			.filter((key) => raw?.[key] !== undefined)
+			.map((key) => `"${key}" in ${settingsPath()} no longer does anything — ${OBSOLETE_SETTINGS[key]}`);
+		const cap = parseMaxOpenAgents(raw?.maxOpenAgents);
+		if (cap.problem) warnings.push(`${settingsPath()}: ${cap.problem}`);
+		return warnings;
 	} catch {
 		return [];
 	}
@@ -556,12 +591,7 @@ export default function (pi: ExtensionAPI) {
 		},
 		{
 			registry,
-			childDeny: settings.childDeny,
-			childMcpServers: settings.childMcpServers,
-			stallSeconds: settings.stallSeconds,
-			idleHibernateMinutes: settings.idleHibernateMinutes,
-			autoResumeMaxAgeMinutes: settings.autoResumeMaxAgeMinutes,
-			maxResumeAttempts: settings.maxResumeAttempts,
+			...managerSettings(settings),
 		},
 	);
 
@@ -1245,6 +1275,10 @@ export default function (pi: ExtensionAPI) {
 								type: "text",
 								text:
 									text +
+									// The cap is configurable, so the orchestrator prompt cannot
+									// state it; this is where the number lives.
+									`\n\nSlots in use: ${manager.openCount} of ${manager.maxOpenAgents} ` +
+									"(hibernated agents hold none)." +
 									(previous ? `\n\n${previous}\n${RESTORABLE_NOTE}` : ""),
 							},
 						],
@@ -1433,23 +1467,15 @@ export default function (pi: ExtensionAPI) {
 			// And this is what lets a *later* pi tell its own leftovers from another
 			// project's: one registry file describes every tree on the machine.
 			parentCwd: sessionCwdOf(ctx),
-			childDeny: settings.childDeny,
-			childMcpServers: settings.childMcpServers,
-			stallSeconds: settings.stallSeconds,
-			idleHibernateMinutes: settings.idleHibernateMinutes,
-			autoResumeMaxAgeMinutes: settings.autoResumeMaxAgeMinutes,
-			maxResumeAttempts: settings.maxResumeAttempts,
+			...managerSettings(settings),
 		});
-		// A key that stopped meaning anything, sitting in a config the user still
-		// edits, is worse than no key at all: it reads as configuration. Said once
-		// per session, at the only point where there is a UI to say it into.
-		for (const key of obsoleteSettingKeys()) {
+		// A key that stopped meaning anything, or a value that was ignored, sitting
+		// in a config the user still edits, is worse than no key at all: it reads as
+		// configuration. Said once per session, at the only point where there is a
+		// UI to say it into.
+		for (const warning of settingWarnings()) {
 			try {
-				ctx.ui?.notify(
-					`subagents: "${key}" in ${settingsPath()} no longer does anything — ` +
-						`${OBSOLETE_SETTINGS[key]}`,
-					"warning",
-				);
+				ctx.ui?.notify(`subagents: ${warning}`, "warning");
 			} catch {
 				/* headless */
 			}

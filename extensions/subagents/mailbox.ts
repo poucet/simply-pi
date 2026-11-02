@@ -166,7 +166,7 @@ export class Mailbox {
 /**
  * What the parent should do about a child that has stopped working.
  *
- * A finished agent holds one of six slots until somebody decides its fate, and
+ * A finished agent holds one of the `maxOpenAgents` slots until somebody decides its fate, and
  * nothing used to ask. `/reload` hid that by wiping every agent; now that they
  * survive a reload, completed children accumulate for real. The cheapest place
  * to put the decision is directly under the result the decision is about.

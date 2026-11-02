@@ -110,8 +110,41 @@ export const ANSWER_WRITE_TIMEOUT_MS = 10_000;
 /** Ceiling on the local filesystem work that prepares (or cleans up) a child. */
 export const SEED_TIMEOUT_MS = 30_000;
 
+/**
+ * How many children may hold a process at once, unless `maxOpenAgents` in
+ * `subagents.json` says otherwise. Hibernated children do not count.
+ */
+export const DEFAULT_MAX_OPEN_AGENTS = 10;
+
+/**
+ * The most `maxOpenAgents` may be set to. Every open child is a whole `pi`
+ * process with its own model traffic, so a typo like `100` must not be taken
+ * at its word.
+ */
+export const MAX_OPEN_AGENTS_CEILING = 32;
+
+/**
+ * Validate a configured `maxOpenAgents`.
+ *
+ * Absent is the default, silently. Anything else that is not an integer in
+ * `1..MAX_OPEN_AGENTS_CEILING` is also the default, but with a `problem` the
+ * caller shows the human — a cap that quietly ignored its setting would read as
+ * configuration that works.
+ */
+export function parseMaxOpenAgents(raw: unknown): { value: number; problem?: string } {
+	if (raw === undefined) return { value: DEFAULT_MAX_OPEN_AGENTS };
+	if (typeof raw === "number" && Number.isInteger(raw) && raw >= 1 && raw <= MAX_OPEN_AGENTS_CEILING) {
+		return { value: raw };
+	}
+	return {
+		value: DEFAULT_MAX_OPEN_AGENTS,
+		problem:
+			`maxOpenAgents must be a whole number from 1 to ${MAX_OPEN_AGENTS_CEILING}; ` +
+			`got ${JSON.stringify(raw)}, using ${DEFAULT_MAX_OPEN_AGENTS}`,
+	};
+}
+
 export const LIMITS = {
-	maxOpenAgents: 6,
 	maxTaskChars: 16_000,
 	maxNameChars: 40,
 	maxActivityLines: 40,
@@ -200,6 +233,8 @@ export interface ManagerConfig {
 	autoResumeMaxAgeMinutes?: number;
 	/** How many times one child may be auto-resumed before it is declared broken. */
 	maxResumeAttempts?: number;
+	/** Children that may hold a process at once; see `parseMaxOpenAgents`. */
+	maxOpenAgents?: number;
 }
 
 export interface ManagerCallbacks {
@@ -483,11 +518,43 @@ export class SubagentManager {
 	 * Children that hold a process slot.
 	 *
 	 * A hibernated agent does not: it is a record and a file. Counting them would
-	 * mean a reload with six children left you unable to delegate anything until
+	 * mean a reload with a full table of children left you unable to delegate anything until
 	 * you closed them one by one.
 	 */
 	get openCount(): number {
 		return this.list().filter((a) => a.status !== "closed" && a.status !== "hibernated").length;
+	}
+
+	/** The process-slot cap in force: `maxOpenAgents` from the config, else the default. */
+	get maxOpenAgents(): number {
+		return parseMaxOpenAgents(this.config.maxOpenAgents).value;
+	}
+
+	/**
+	 * Slots promised to a spawn or revive that has passed the cap check but has
+	 * not yet registered a process.
+	 *
+	 * Both paths await (summarizing, seeding, discovery, process start) between
+	 * checking the cap and the moment their agent starts counting in `openCount`.
+	 * Without a reservation taken synchronously at the check, a batch of spawns
+	 * issued as parallel tool calls all saw the same free table and all got in.
+	 */
+	private reservedSlots = 0;
+
+	/** Slots taken, including ones promised to work still starting up. */
+	private get slotsInUse(): number {
+		return this.openCount + this.reservedSlots;
+	}
+
+	/** Take one reserved slot; the returned function gives it back, at most once. */
+	private reserveSlot(): () => void {
+		this.reservedSlots += 1;
+		let held = true;
+		return () => {
+			if (!held) return;
+			held = false;
+			this.reservedSlots -= 1;
+		};
 	}
 
 	/** Path of the scratchpad shared by the parent and every child in this session. */
@@ -666,8 +733,37 @@ export class SubagentManager {
 		// A full table used to be the orchestrator's problem to notice mid-
 		// delegation; taking the stalest *finished* agent is what a careful human
 		// would do anyway.
-		const reclaimed = await this.makeRoom();
+		//
+		// `makeRoom` reserves the slot before it awaits anything; the reservation is
+		// handed over when the agent registers, or given back if it never does.
+		const { reclaimed, release } = await this.makeRoom();
+		try {
+			return await this.launchReserved(ctx, options, { name, task, persona, cwd, abort, reclaimed, release });
+		} finally {
+			release();
+		}
+	}
 
+	/**
+	 * Everything `spawn` does once a slot is reserved for it.
+	 *
+	 * Split out so the reservation has one `finally` around all of it; `release`
+	 * is called the moment the agent itself counts in `openCount`.
+	 */
+	private async launchReserved(
+		ctx: any,
+		options: SpawnOptions,
+		prepared: {
+			name: string;
+			task: string;
+			persona: Persona | undefined;
+			cwd: string;
+			abort: AbortSignal | undefined;
+			reclaimed: string | undefined;
+			release: () => void;
+		},
+	): Promise<ManagedAgent> {
+		const { name, task, persona, cwd, abort, reclaimed, release } = prepared;
 		const seed = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 16);
 		let id: string;
 		do {
@@ -814,6 +910,8 @@ export class SubagentManager {
 		};
 
 		this.agents.set(id, agent);
+		// The agent now counts in `openCount` itself, so the reservation is spent.
+		release();
 		this.usedNames.add(name.toLowerCase());
 		this.attach(agent, client);
 
@@ -860,8 +958,10 @@ export class SubagentManager {
 	 * session directory, which is why failed children are never victims in the
 	 * first place.
 	 */
-	private async makeRoom(): Promise<string | undefined> {
-		if (this.openCount < LIMITS.maxOpenAgents) return undefined;
+	private async makeRoom(): Promise<{ reclaimed: string | undefined; release: () => void }> {
+		// Check and reserve with no await in between: that gap is what let a batch
+		// of parallel spawns all pass the check against the same table.
+		if (this.slotsInUse < this.maxOpenAgents) return { reclaimed: undefined, release: this.reserveSlot() };
 		// Only agents that actually hold a slot are worth taking: hibernated ones
 		// are excluded from `openCount`, so closing one would destroy a conversation
 		// without freeing anything.
@@ -872,19 +972,27 @@ export class SubagentManager {
 		);
 		if (!choice.victim) {
 			throw new Error(
-				`too many open subagents (${this.openCount}/${LIMITS.maxOpenAgents}) and none can be ` +
+				`too many open subagents (${this.slotsInUse}/${this.maxOpenAgents}) and none can be ` +
 					`reclaimed: ${choice.reason}. Close one before spawning.`,
 			);
 		}
 		const victim = this.get(choice.victim.id);
-		if (!victim) return undefined;
+		const release = this.reserveSlot();
+		if (!victim) return { reclaimed: undefined, release };
 		try {
 			this.callbacks.onReap?.(victim, "reclaimed");
 		} catch {
 			/* the spawn result names it too */
 		}
-		await this.close(victim.id);
-		return victim.name;
+		try {
+			// `close` marks the victim closed synchronously, before its first await,
+			// so its slot is free — and ours — before any other spawn can look.
+			await this.close(victim.id);
+		} catch (error) {
+			release();
+			throw error;
+		}
+		return { reclaimed: victim.name, release };
 	}
 
 	/**
@@ -1422,15 +1530,13 @@ export class SubagentManager {
 		if (agent.status === "closed") throw new Error(`subagent "${agent.name}" is closed`);
 		if (agent.client?.running) return agent;
 		// A revive turns a record back into a process, so it is subject to the same
-		// cap as a spawn; otherwise reviving six hibernated children after a reload
-		// quietly doubles the number of running agents.
-		const others = this.list().filter(
-			(other) =>
-				other.id !== agent.id && other.status !== "closed" && other.status !== "hibernated",
-		).length;
-		if (others >= LIMITS.maxOpenAgents) {
+		// cap as a spawn; otherwise reviving a table's worth of hibernated children
+		// after a reload quietly doubles the number of running agents.
+		const holdsSlot = agent.status !== "hibernated";
+		const others = this.slotsInUse - (holdsSlot ? 1 : 0);
+		if (others >= this.maxOpenAgents) {
 			throw new Error(
-				`too many open subagents (${others}/${LIMITS.maxOpenAgents}); close one before ` +
+				`too many open subagents (${others}/${this.maxOpenAgents}); close one before ` +
 					`resuming "${agent.name}"`,
 			);
 		}
@@ -1439,6 +1545,19 @@ export class SubagentManager {
 				`subagent "${agent.name}" cannot be revived: its session file is gone (${agent.sessionFile})`,
 			);
 		}
+		// A hibernated agent does not count until it is `idle` again, several awaits
+		// from here, so it holds a reservation until then — the same gap, and the
+		// same fix, as in `spawn`. One that already counts needs none.
+		const release = holdsSlot ? () => {} : this.reserveSlot();
+		try {
+			return await this.reviveReserved(agent, signal);
+		} finally {
+			release();
+		}
+	}
+
+	/** The body of `revive`, once the cap has been checked and a slot reserved. */
+	private async reviveReserved(agent: ManagedAgent, signal?: AbortSignal): Promise<ManagedAgent> {
 		// Detached *before* it is stopped: `handleExit` ignores any client that is
 		// no longer the agent's, so the death we are about to cause is not reported
 		// as a crash of the agent we are reviving.
@@ -1839,7 +1958,7 @@ export class SubagentManager {
 
 	private buildSystemPrompt(
 		name: string,
-		task: string,
+		_task: string,
 		cwd: string,
 		notesPath: string,
 		persona?: Persona,

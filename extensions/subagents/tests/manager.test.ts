@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { LIMITS, describeToolCall, normalizeName } from "../manager.ts";
+import {
+	DEFAULT_MAX_OPEN_AGENTS,
+	LIMITS,
+	MAX_OPEN_AGENTS_CEILING,
+	describeToolCall,
+	normalizeName,
+	parseMaxOpenAgents,
+} from "../manager.ts";
 
 // --- normalizeName --------------------------------------------------------
 
@@ -145,10 +152,10 @@ test("a restored name stays reserved across the reload", () => {
 
 test("hibernated agents do not hold a process slot", () => {
 	const { m } = manager();
-	for (let i = 0; i < LIMITS.maxOpenAgents; i += 1) {
+	for (let i = 0; i < m.maxOpenAgents; i += 1) {
 		m.restore([record({ id: `w${i}`, name: `w${i}` })]);
 	}
-	assert.equal(m.list().length, LIMITS.maxOpenAgents);
+	assert.equal(m.list().length, m.maxOpenAgents);
 	assert.equal(m.openCount, 0);
 });
 
@@ -333,8 +340,8 @@ test("a full slot table reclaims the stalest finished agent instead of failing",
 	const { m } = manager();
 	try {
 		const now = Date.now();
-		// Five running children plus one completed one: the completed one goes.
-		for (let i = 0; i < 5; i += 1) {
+		// A table of running children plus one completed one: the completed one goes.
+		for (let i = 0; i < m.maxOpenAgents - 1; i += 1) {
 			const agent = finished(m, `run-${i}`, "running", now);
 			agent.busy = true;
 		}
@@ -342,7 +349,7 @@ test("a full slot table reclaims the stalest finished agent instead of failing",
 		victim!.status = "completed";
 		victim!.endedAt = now - 90 * 60_000;
 		victim!.lastEventAt = now - 90 * 60_000;
-		assert.equal(m.openCount, LIMITS.maxOpenAgents);
+		assert.equal(m.openCount, m.maxOpenAgents);
 
 		// The victim the rule picks is the one the manager must close.
 		const choice = selectReapVictim(
@@ -363,7 +370,7 @@ test("a full slot table reclaims the stalest finished agent instead of failing",
 		await m.close(choice.victim!.id);
 		assert.equal(m.get("stale"), undefined);
 		assert.equal(existsSync(sessionFile), false, "a reclaimed agent's session dir is removed");
-		assert.equal(m.openCount, 5);
+		assert.equal(m.openCount, m.maxOpenAgents - 1);
 	} finally {
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previous;
@@ -399,7 +406,7 @@ test("a spawn that fails validation never costs an agent", async () => {
 		{},
 	);
 	try {
-		for (let i = 0; i < 5; i += 1) {
+		for (let i = 0; i < m.maxOpenAgents - 1; i += 1) {
 			const agent = finished(m, `run-${i}`, "running", Date.now());
 			agent.busy = true;
 		}
@@ -434,7 +441,7 @@ test("a valid spawn into a full table reclaims the stalest finished agent", asyn
 		{},
 	);
 	try {
-		for (let i = 0; i < 5; i += 1) {
+		for (let i = 0; i < m.maxOpenAgents - 1; i += 1) {
 			const agent = finished(m, `run-${i}`, "running", Date.now());
 			agent.busy = true;
 		}
@@ -461,7 +468,8 @@ test("a valid spawn into a full table reclaims the stalest finished agent", asyn
 
 test("spawn still refuses when every slot holds work that must not be lost", async () => {
 	const { m } = manager();
-	for (let i = 0; i < 4; i += 1) {
+	const running = m.maxOpenAgents - 2;
+	for (let i = 0; i < running; i += 1) {
 		const agent = finished(m, `run-${i}`, "running", Date.now());
 		agent.busy = true;
 	}
@@ -472,19 +480,19 @@ test("spawn still refuses when every slot holds work that must not be lost", asy
 		() => m.spawn({} as any, [], { name: "new", task: "real task" }),
 		(error: Error) => {
 			assert.match(error.message, /none can be reclaimed/);
-			assert.match(error.message, /4 still running/);
+			assert.match(error.message, new RegExp(`${running} still running`));
 			assert.match(error.message, /1 stalled/);
 			assert.match(error.message, /1 failed/);
 			return true;
 		},
 	);
 	// Nothing was destroyed on the way to that error.
-	assert.equal(m.list().length, 6);
+	assert.equal(m.list().length, m.maxOpenAgents);
 });
 
 test("a table full of running agents is not 'fixed' by closing a hibernated one", async () => {
 	const { m } = manager();
-	for (let i = 0; i < LIMITS.maxOpenAgents; i += 1) {
+	for (let i = 0; i < m.maxOpenAgents; i += 1) {
 		const agent = finished(m, `run-${i}`, "running", Date.now());
 		agent.busy = true;
 	}

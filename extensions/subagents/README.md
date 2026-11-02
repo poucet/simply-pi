@@ -29,7 +29,8 @@ interrupting you.
 | `retry` | `name` | Recover a stalled child on its existing conversation (see *Stalls*). |
 | `close` | `name` | End the child, free its slot. |
 
-Limits: 6 open children, 16k chars per task, 24 KiB per final result.
+Limits: `maxOpenAgents` open children (10 unless configured — see
+*Configuration*), 16k chars per task, 24 KiB per final result.
 Names are never reused within a session — including names that only exist as
 hibernated records after a reload. Hibernated children hold no slot, and a spawn
 that would exceed the cap reclaims the stalest finished child rather than failing
@@ -705,6 +706,7 @@ machinery does with focus. The wheel and render-height contracts are pinned in
   "autoResumeMaxAgeMinutes": 60,
   "maxResumeAttempts": 3,
   "autoRestoreMaxAgeMinutes": 1440,
+  "maxOpenAgents": 10,
   "childDeny": ["mcp", "slack-approval"]
 }
 ```
@@ -727,6 +729,12 @@ process is stopped and it is hibernated; `0` disables the sweep.
 still restart itself at a cold start — a reload resumes regardless of age.
 `maxResumeAttempts` (default 3, `0` disables the cap) stops a crash loop. See
 *Interrupted work resumes itself*.
+
+`maxOpenAgents` (default 10, a whole number from 1 to 32) is how many children
+may hold a process at once; hibernated children hold none. A spawn into a full
+table reclaims the stalest finished child (see *Reaping*), and a revive is held
+to the same cap. Any other value falls back to 10 and says so once per session.
+The `list` action reports how many slots are in use.
 
 `autoRestoreMaxAgeMinutes` (default 1440, i.e. a day; `0` disables the bound) is
 the *other* half: how stale the previous run's children may be and still be
@@ -901,8 +909,8 @@ pane) **revives** it: a fresh `pi --mode rpc` on its *existing* `--session` file
 so the child resumes with its whole conversation and no context is lost. Nothing
 is re-seeded — the session already exists.
 
-Hibernated agents do not hold a process slot, so a reload with six children does
-not lock you out of delegating. `close` works on them exactly as before.
+Hibernated agents do not hold a process slot, so a reload with a full table of
+children does not lock you out of delegating. `close` works on them exactly as before.
 
 ### Interrupted work resumes itself
 
@@ -1045,7 +1053,7 @@ file>` — so transcripts and conversations come back intact.
 
 ### Reaping
 
-A finished child still holds one of six slots until somebody decides its fate,
+A finished child still holds one of the `maxOpenAgents` slots until somebody decides its fate,
 and nothing used to ask. `/reload` hid that by wiping every agent; now that they
 survive a reload, they would genuinely accumulate. Three mechanisms, all sharing
 the rules in `reap.ts`:
@@ -1071,8 +1079,8 @@ the rules in `reap.ts`:
 
 Never reclaimed: `running`/`starting` (work in flight), `stalled` (a network
 problem, not a dead agent), `interrupted` (the human stopped it on purpose), and
-`failed` — whose transcript is the only post-mortem there is. When all six slots
-hold those, the spawn fails with a message naming what is in the way. Auto-reap
+`failed` — whose transcript is the only post-mortem there is. When every slot
+holds one of those, the spawn fails with a message naming what is in the way. Auto-reap
 goes through the same `close()` as an explicit one, so the cleanup policy
 (including keeping a failed child's session directory) is shared by construction.
 

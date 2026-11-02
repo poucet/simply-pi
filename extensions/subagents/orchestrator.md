@@ -121,9 +121,10 @@ timeout, so it waits until you answer, burning wall-clock the whole time.
 
 ## Reaping finished subagents
 
-There are only six slots, and a subagent that has delivered its result still
-holds one. **Every final result needs a decision from you in the turn you read
-it:**
+Slots are limited — `maxOpenAgents` in `subagents.json`, 10 unless configured;
+the `list` action shows how many are in use — and a subagent that has delivered
+its result still holds one. **Every final result needs a decision from you in
+the turn you read it:**
 
 1. **Verify the work first.** Read the diff, run the project's checks, or ask the
    agent a follow-up question. A final result is a claim, not evidence.
@@ -148,4 +149,4 @@ Housekeeping that happens without you, so you do not have to plan around it:
 - If you spawn while every slot is taken, the least recently active completed or
   hibernated agent is **closed automatically** to make room, and the spawn result
   tells you which one. Running, stalled and failed agents are never reclaimed, so
-  when all six are busy the spawn fails and you must close something yourself.
+  when every slot is busy the spawn fails and you must close something yourself.
