@@ -5,6 +5,17 @@ format is stated once in SYSTEM.md §2.
 
 ## Unreleased
 
+#### Subagent cap: 10 by default, configurable, and held under parallel spawns · 2026-11-02 21:10 · psswvtqksoko
+
+The open-subagent cap was a hard-coded 6. It is now `maxOpenAgents` in
+`~/.pi/agent/subagents.json`: 10 by default, a whole number from 1 to 32. Any
+other value falls back to 10 and is reported once per session. Fixed: spawns
+issued as parallel tool calls could all get past the cap (11 running under a cap
+of 6), because the check happened several awaits before the new agent counted.
+Revives had the same gap. Both now reserve their slot at the check. The `list`
+action reports how many slots are in use, and the orchestrator prompt names the
+setting instead of a number. New tests are in `tests/slots.test.ts`.
+
 #### Subagent chat owns the wheel: terminal scrollback can no longer show main content · 2026-08-30 01:56 · pkxuprvuwpov
 
 Bug: scrolling up in a subagent chat "past the beginning of the terminal window"
