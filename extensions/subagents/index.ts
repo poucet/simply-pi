@@ -75,8 +75,9 @@ import {
 } from "./notify.ts";
 import { describePersonas, discoverPersonas } from "./personas.ts";
 import { renderSubagentCall, renderSubagentResult } from "./render.ts";
-import { MAIN_ENTRY_ID, SwitcherStrip } from "./switcher.ts";
-import type { ChatHost } from "./types.ts";
+import { DescendantTracker } from "./descendants.ts";
+import { MAIN_ENTRY_ID, SwitcherStrip, isNestedEntryId } from "./switcher.ts";
+import type { AgentStatus, ChatHost } from "./types.ts";
 
 type OrchestrateMode = "off" | "nudge" | "strict";
 
@@ -672,8 +673,21 @@ export default function (pi: ExtensionAPI) {
 	// ------------------------------------------------------------------- ui --
 
 	/** Everything the chat UI is allowed to know about the manager. */
+	/**
+	 * Agents below our children, read from the registry and their session files.
+	 * Root only: it exists to be drawn, and a child draws nothing.
+	 */
+	const descendants = new DescendantTracker({
+		registryFile: () => registry.file,
+		readNodes: () => registry.read().nodes,
+		roots: () => manager.list(),
+		icon: (status) => manager.statusIcon(status as AgentStatus),
+		onChange: () => refreshUi(),
+	});
+
 	const chatHost: ChatHost = {
 		agents: () => manager.list(),
+		descendants: (agent) => descendants.of(agent.sessionId),
 		unread: (agentId) => manager.mailbox.peek().filter((event) => event.agentId === agentId).length,
 		statusIcon: (agent) => manager.statusIcon(agent.status),
 		subscribe: (agentId, listener) => manager.onAgentEvent(agentId, listener),
@@ -728,6 +742,9 @@ export default function (pi: ExtensionAPI) {
 			// editor slot, which is exactly the case the registry exists for.)
 			publishBadges();
 			if (!uiContext?.hasUI) return;
+			// Grandchildren and deeper exist here only to be drawn; polls only while
+			// there are children to look under.
+			descendants.ensure();
 			uiContext.ui.setStatus(
 				"subagents",
 				// `undefined` clears the entry, both when there are no agents and when the
@@ -782,6 +799,11 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	async function openChat(ctx: any, agentNameOrId?: string): Promise<void> {
+		// A descendant picked in the strip: a read-only transcript, by entry id.
+		if (agentNameOrId && isNestedEntryId(agentNameOrId)) {
+			await openSubagentChat(ctx.ui, chatHost, agentNameOrId);
+			return;
+		}
 		if (manager.list().length === 0) {
 			ctx.ui.notify("No subagents in this session", "info");
 			return;
@@ -1895,6 +1917,7 @@ export default function (pi: ExtensionAPI) {
 		wakeWhenIdle = false;
 		if (stallTimer) clearInterval(stallTimer);
 		stallTimer = undefined;
+		descendants.stop();
 		disposeChatPanes();
 		// Stop auto-resume launching anything else, and let the launch already in
 		// flight finish handing its process over — bounded, because a teardown that

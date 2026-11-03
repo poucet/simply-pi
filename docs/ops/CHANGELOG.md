@@ -5,6 +5,19 @@ format is stated once in SYSTEM.md §2.
 
 ## Unreleased
 
+#### Subagents of subagents show up in the switcher, as a tree · 2026-11-03 09:00 · zutorqvptnyz
+
+The list below the editor now shows every agent in the tree, not only your
+direct children: each child keeps its number, and the agents it spawned (and
+theirs) sit indented under it with the same row — status, elapsed, turns, cost,
+latest activity. They can be selected in the switcher strip too (marked `└`,
+right after their parent). Opening one shows its transcript read-only, followed
+live from its session file; there is no input box, because it can only be
+reached through its parent. Status comes from the agent registry (checked
+against the process id), and turns, cost and activity from tailing the session
+file every 1.5s, only while you have children. Nothing changed in how parent and
+child talk to each other.
+
 #### Subagent cap: 10 by default, configurable, and held under parallel spawns · 2026-11-02 21:10 · psswvtqksoko
 
 The open-subagent cap was a hard-coded 6. It is now `maxOpenAgents` in

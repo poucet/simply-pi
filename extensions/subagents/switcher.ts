@@ -1,9 +1,10 @@
 /**
  * The chat switcher strip.
  *
- * One selectable row of chats — the main conversation first, then every child:
+ * One selectable row of chats — the main conversation first, then every child,
+ * each followed by the agents it spawned (marked `└`, read-only when opened):
  *
- *     ● main │ ◐ nav-ping │ ✓ reviewer●
+ *     ● main │ ◐ nav-ping │ └◐ coder-a │ ✓ reviewer●
  *
  * It is rendered under the main editor (as a widget) and again at the bottom of
  * a subagent pane, driven by the same state so the two never disagree.
@@ -19,7 +20,7 @@
  */
 
 import { Key, matchesKey } from "@earendil-works/pi-tui";
-import type { ChatHost } from "./types.ts";
+import type { ChatHost, DescendantView, ManagedAgent } from "./types.ts";
 
 /** The main conversation, always the first entry. */
 export const MAIN_ENTRY_ID = "main";
@@ -44,16 +45,55 @@ export interface StripTheme {
 	bold(text: string): string;
 }
 
-/** Main chat first, then the children in spawn order. */
+/** Entry ids of agents below this process's children carry this prefix. */
+export const NESTED_ENTRY_PREFIX = "nested:";
+
+export function nestedEntryId(sessionId: string): string {
+	return `${NESTED_ENTRY_PREFIX}${sessionId}`;
+}
+
+export function isNestedEntryId(entryId: string): boolean {
+	return entryId.startsWith(NESTED_ENTRY_PREFIX);
+}
+
+/** One row of the agent tree: a direct child (numbered) or a descendant of one. */
+export type TreeEntry =
+	| { kind: "agent"; id: string; agent: ManagedAgent; number: number }
+	| { kind: "nested"; id: string; node: DescendantView; under: ManagedAgent };
+
+/**
+ * The whole tree, in display order: each direct child in spawn order, followed
+ * by everything below it (depth first). Only direct children are numbered.
+ *
+ * The one ordering the widget, the strip and the chat pane all use, so they
+ * never disagree about what comes after what.
+ */
+export function treeEntries(host: ChatHost): TreeEntry[] {
+	const out: TreeEntry[] = [];
+	host.agents().forEach((agent, index) => {
+		out.push({ kind: "agent", id: agent.id, agent, number: index + 1 });
+		for (const node of host.descendants?.(agent) ?? []) {
+			out.push({ kind: "nested", id: nestedEntryId(node.sessionId), node, under: agent });
+		}
+	});
+	return out;
+}
+
+/** Main chat first, then the tree: each child, then its descendants. */
 export function stripEntries(host: ChatHost): SwitcherEntry[] {
 	const entries: SwitcherEntry[] = [{ id: MAIN_ENTRY_ID, label: "main", icon: "●", unread: 0 }];
-	for (const agent of host.agents()) {
-		entries.push({
-			id: agent.id,
-			label: agent.name,
-			icon: host.statusIcon(agent),
-			unread: host.unread(agent.id),
-		});
+	for (const entry of treeEntries(host)) {
+		entries.push(
+			entry.kind === "agent"
+				? {
+						id: entry.id,
+						label: entry.agent.name,
+						icon: host.statusIcon(entry.agent),
+						unread: host.unread(entry.agent.id),
+					}
+				: // No mailbox reaches us from below a child, so never unread.
+					{ id: entry.id, label: entry.node.name, icon: `└${entry.node.icon}`, unread: 0 },
+		);
 	}
 	return entries;
 }

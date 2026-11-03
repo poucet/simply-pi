@@ -58,7 +58,14 @@ import {
 	truncateToWidth,
 } from "@earendil-works/pi-tui";
 import { AgentChatPane, ChatPaneRegistry } from "./chat-pane.ts";
-import { MAIN_ENTRY_ID, SwitcherStrip, renderStrip, shouldEnterStrip } from "./switcher.ts";
+import {
+	MAIN_ENTRY_ID,
+	SwitcherStrip,
+	type TreeEntry,
+	renderStrip,
+	shouldEnterStrip,
+	treeEntries,
+} from "./switcher.ts";
 import type { ChatHost, ManagedAgent } from "./types.ts";
 
 export type { ChatHost };
@@ -132,6 +139,9 @@ function isMouseReport(data: string): boolean {
 /**
  * The below-editor widget: one detail line per agent, then the selectable strip.
  *
+ * Agents are drawn as a tree: each direct child (numbered), then everything it
+ * spawned, indented by depth with the same row shape.
+ *
  * The strip is the only thing that reacts to the keyboard; the detail lines
  * above it carry the facts (elapsed, turns, cost, latest activity) that do not
  * fit on one row.
@@ -144,11 +154,26 @@ export function switcherLines(
 ): string[] {
 	const agents = host.agents();
 	if (agents.length === 0) return [];
-	const lines = agents.map((agent, index) => {
+	const now = Date.now();
+	/** The part every row shares, whatever its depth. */
+	const row = (icon: string, name: string, startedAt: number, endedAt: number | undefined, turns: number, cost: number) =>
+		`${icon} ${theme.bold(name)} ` +
+		theme.fg("dim", `${humanDuration((endedAt ?? now) - startedAt)} ${turns}t${cost > 0 ? ` ${formatCost(cost)}` : ""}`) +
+		"  ";
+	const lines = treeEntries(host).map((entry) => {
+		if (entry.kind === "nested") {
+			const node = entry.node;
+			// Under the number column of a direct child, two more per level below.
+			const indent = `    ${"  ".repeat(Math.max(0, node.depth - 1))}`;
+			return (
+				`${indent}${theme.fg("dim", "└")} ` +
+				row(node.icon, node.name, node.startedAt, node.endedAt, node.turns, node.cost) +
+				theme.fg("muted", node.activity.slice(0, 60))
+			);
+		}
+		const agent = entry.agent;
 		const unread = host.unread(agent.id);
 		const marker = unread > 0 ? theme.fg("accent", "●") : " ";
-		const elapsed = humanDuration((agent.endedAt ?? Date.now()) - agent.startedAt);
-		const cost = agent.usage.cost > 0 ? ` ${formatCost(agent.usage.cost)}` : "";
 		// A blocked child's last activity line is whatever it did before asking,
 		// which reads as progress. Say what it is actually doing: nothing.
 		const last = agent.pendingQuestion
@@ -158,8 +183,8 @@ export function switcherLines(
 			? theme.fg("warning", last.slice(0, 60))
 			: theme.fg("muted", last.slice(0, 60));
 		return (
-			`${marker} ${theme.fg("dim", String(index + 1))} ${host.statusIcon(agent)} ` +
-			`${theme.bold(agent.name)} ${theme.fg("dim", `${elapsed} ${agent.usage.turns}t${cost}`)}  ` +
+			`${marker} ${theme.fg("dim", String(entry.number))} ` +
+			row(host.statusIcon(agent), agent.name, agent.startedAt, agent.endedAt, agent.usage.turns, agent.usage.cost) +
 			tail
 		);
 	});
@@ -190,9 +215,19 @@ export function switcherLines(
 
 // ------------------------------------------------------------------- chat ---
 
-/** Exported for headless rendering checks; use `openSubagentChat` in the app. */
+/**
+ * Exported for headless rendering checks; use `openSubagentChat` in the app.
+ *
+ * Shows any entry of the tree. A direct child is a live chat with an input box.
+ * Anything deeper is a **read-only transcript**: it runs in a child's process,
+ * so this one has no channel to it — the pane is drawn from its session file,
+ * re-read by {@link tick}, and says plainly that messages go through its parent.
+ */
 export class SubagentChatView implements Component, Focusable {
-	private index = 0;
+	/** The entry on screen, by id: entries come and go underneath an index. */
+	private currentId = MAIN_ENTRY_ID;
+	/** Where it was, so a closed entry falls back to its neighbour. */
+	private lastIndex = 0;
 	private editor: Editor;
 	private strip: SwitcherStrip;
 	private _focused = false;
@@ -205,18 +240,17 @@ export class SubagentChatView implements Component, Focusable {
 		private host: ChatHost,
 		private registry: ChatPaneRegistry,
 		private done: () => void,
-		startAgentId?: string,
+		startEntryId?: string,
 	) {
-		const agents = this.host.agents();
-		const found = agents.findIndex((a) => a.id === startAgentId);
-		this.index = found >= 0 ? found : 0;
+		const entries = treeEntries(this.host);
+		this.currentId = entries.find((entry) => entry.id === startEntryId)?.id ?? entries[0]?.id ?? MAIN_ENTRY_ID;
 
 		// The same strip as the one under the main editor, so the two never disagree
 		// about what is selected — here "main" means closing the pane.
 		this.strip = new SwitcherStrip(host, {
 			requestRender: () => this.tui.requestRender(),
 			open: (entryId) => this.openEntry(entryId),
-			current: () => this.agent()?.id ?? MAIN_ENTRY_ID,
+			current: () => this.entry()?.id ?? MAIN_ENTRY_ID,
 		});
 
 		this.editor = new Editor(
@@ -236,16 +270,49 @@ export class SubagentChatView implements Component, Focusable {
 		this.editor.focused = value;
 	}
 
-	private agent(): ManagedAgent | undefined {
-		const agents = this.host.agents();
+	private entry(): TreeEntry | undefined {
+		const entries = treeEntries(this.host);
+		if (entries.length === 0) return undefined;
+		let index = entries.findIndex((entry) => entry.id === this.currentId);
 		// An agent can be closed while its chat is open.
-		if (this.index >= agents.length) this.index = Math.max(0, agents.length - 1);
-		return agents[this.index];
+		if (index < 0) index = Math.min(this.lastIndex, entries.length - 1);
+		this.lastIndex = index;
+		this.currentId = entries[index]!.id;
+		return entries[index];
+	}
+
+	private agent(): ManagedAgent | undefined {
+		const entry = this.entry();
+		return entry?.kind === "agent" ? entry.agent : undefined;
+	}
+
+	/** True while showing an agent this process cannot talk to. */
+	private get readOnly(): boolean {
+		return this.entry()?.kind === "nested";
 	}
 
 	private pane(): AgentChatPane | undefined {
-		const agent = this.agent();
-		return agent ? this.registry.get(agent) : undefined;
+		const entry = this.entry();
+		if (!entry) return undefined;
+		if (entry.kind === "agent") return this.registry.get(entry.agent);
+		const node = entry.node;
+		if (!node.sessionFile) return undefined;
+		return this.registry.transcript({
+			id: entry.id,
+			name: node.name,
+			cwd: node.cwd ?? entry.under.cwd,
+			sessionFile: node.sessionFile,
+		});
+	}
+
+	/** Pick up what a read-only transcript's file gained. Driven by a timer while open. */
+	tick(): void {
+		if (!this.readOnly) return;
+		try {
+			if (this.pane()?.follow()) this.tui.requestRender();
+		} catch {
+			/* a transcript that cannot be read stays as it was */
+		}
 	}
 
 	private submit(text: string): void {
@@ -271,10 +338,11 @@ export class SubagentChatView implements Component, Focusable {
 	/** Show another chat. The main chat is not a pane, so it closes this one. */
 	private openEntry(entryId: string): void {
 		if (entryId === MAIN_ENTRY_ID) return this.done();
-		const found = this.host.agents().findIndex((agent) => agent.id === entryId);
-		if (found >= 0) this.index = found;
+		if (treeEntries(this.host).some((entry) => entry.id === entryId)) this.currentId = entryId;
 		this.status = undefined;
 		this.tui.requestRender();
+		// Up to date at once, rather than one tick late.
+		this.tick();
 	}
 
 	private scroll(lines: number): void {
@@ -286,7 +354,9 @@ export class SubagentChatView implements Component, Focusable {
 	}
 
 	handleInput(data: string): void {
-		const editorBusy = this.editor.isShowingAutocomplete();
+		const readOnly = this.readOnly;
+		const editorBusy = !readOnly && this.editor.isShowingAutocomplete();
+		const editorText = readOnly ? "" : this.editor.getText();
 
 		// The wheel is pointer input, so it outranks whatever the keyboard focus
 		// is doing — it must move the pane in both TUI modes (see the module
@@ -315,7 +385,7 @@ export class SubagentChatView implements Component, Focusable {
 		if (
 			matchesKey(data, Key.down) &&
 			shouldEnterStrip({
-				text: this.editor.getText(),
+				text: editorText,
 				autocompleteOpen: editorBusy,
 				agentCount: this.host.agents().length,
 			})
@@ -323,7 +393,7 @@ export class SubagentChatView implements Component, Focusable {
 			return this.strip.focus();
 		}
 
-		const editorEmpty = this.editor.getText().length === 0;
+		const editorEmpty = editorText.length === 0;
 		if (editorEmpty && !editorBusy) {
 			if (matchesKey(data, Key.left)) return this.strip.cycle(-1);
 			if (matchesKey(data, Key.right)) return this.strip.cycle(1);
@@ -349,6 +419,9 @@ export class SubagentChatView implements Component, Focusable {
 		if (matchesKey(data, "shift+up")) return this.scroll(-1);
 		if (matchesKey(data, "shift+down")) return this.scroll(1);
 
+		// A transcript has no input box: typing goes nowhere rather than into an
+		// editor that is not on screen.
+		if (readOnly) return;
 		this.editor.handleInput(data);
 		this.tui.requestRender();
 	}
@@ -361,18 +434,20 @@ export class SubagentChatView implements Component, Focusable {
 	render(width: number): string[] {
 		const theme = this.theme;
 		const rows = Math.max(8, this.tui.terminal.rows);
-		const agent = this.agent();
+		const entry = this.entry();
 
-		const header = this.renderHeader(width, agent);
+		const header = this.renderHeader(width, entry);
 		const bar = this.renderBar(width);
-		const editorLines = this.editor.render(width);
+		const editorLines = entry?.kind === "nested" ? this.renderReadOnlyNotice(width, entry) : this.editor.render(width);
 		const bodyHeight = Math.max(1, rows - header.length - bar.length - editorLines.length);
 		this.lastBodyHeight = bodyHeight;
 
 		const body: string[] = [];
-		const pane = agent ? this.registry.get(agent) : undefined;
+		const pane = this.pane();
 		if (!pane) {
-			body.push(theme.fg("muted", " No subagents in this session."));
+			body.push(
+				theme.fg("muted", entry ? " No transcript on disk for this agent." : " No subagents in this session."),
+			);
 		} else {
 			const content = pane.content.render(width);
 			const maxScroll = Math.max(0, content.length - bodyHeight);
@@ -384,20 +459,50 @@ export class SubagentChatView implements Component, Focusable {
 		return [...header, ...body.slice(0, bodyHeight), ...editorLines, ...bar];
 	}
 
-	private renderHeader(width: number, agent: ManagedAgent | undefined): string[] {
+	private renderHeader(width: number, entry: TreeEntry | undefined): string[] {
 		const theme = this.theme;
-		if (!agent) return [truncateToWidth(theme.bold(" subagents"), width, "")];
-		const parts = [
-			`${this.host.statusIcon(agent)} ${agent.status}`,
-			agent.persona ? `persona ${agent.persona}` : undefined,
-			`context ${agent.contextMode}`,
-			agent.model,
-			`${agent.usage.turns} turns`,
-			formatCost(agent.usage.cost),
-			agent.cwd,
-		].filter(Boolean);
-		const line = ` ${theme.bold(agent.name)} ${theme.fg("dim", parts.join(" · "))}`;
+		if (!entry) return [truncateToWidth(theme.bold(" subagents"), width, "")];
+		const parts =
+			entry.kind === "agent"
+				? [
+						`${this.host.statusIcon(entry.agent)} ${entry.agent.status}`,
+						entry.agent.persona ? `persona ${entry.agent.persona}` : undefined,
+						`context ${entry.agent.contextMode}`,
+						entry.agent.model,
+						`${entry.agent.usage.turns} turns`,
+						formatCost(entry.agent.usage.cost),
+						entry.agent.cwd,
+					]
+				: [
+						`${entry.node.icon} ${entry.node.status}`,
+						"read-only",
+						`spawned by ${entry.node.parentName}`,
+						entry.node.persona ? `persona ${entry.node.persona}` : undefined,
+						entry.node.model,
+						`${entry.node.turns} turns`,
+						formatCost(entry.node.cost),
+						entry.node.cwd,
+					];
+		const name = entry.kind === "agent" ? entry.agent.name : entry.node.name;
+		const line = ` ${theme.bold(name)} ${theme.fg("dim", parts.filter(Boolean).join(" · "))}`;
 		return [truncateToWidth(line, width, "…")];
+	}
+
+	/** Stands where the input box would be, and says why there is none. */
+	private renderReadOnlyNotice(width: number, entry: Extract<TreeEntry, { kind: "nested" }>): string[] {
+		const theme = this.theme;
+		const parent = entry.node.parentName;
+		return [
+			theme.fg("border", "─".repeat(Math.max(0, width))),
+			truncateToWidth(
+				theme.fg(
+					"warning",
+					` read-only transcript · ${entry.node.name} runs under ${parent}; message it through ${parent}`,
+				),
+				width,
+				"…",
+			),
+		];
 	}
 
 	private renderBar(width: number): string[] {
@@ -407,7 +512,9 @@ export class SubagentChatView implements Component, Focusable {
 			"dim",
 			this.strip.focused
 				? " ←/→ select · enter open · ↑/esc back to the input"
-				: " ←/→ or tab switch · ↓ switcher · pgup/pgdn scroll · enter send · esc main",
+				: this.readOnly
+					? " ←/→ or tab switch · ↓ switcher · pgup/pgdn scroll · esc main"
+					: " ←/→ or tab switch · ↓ switcher · pgup/pgdn scroll · enter send · esc main",
 		);
 		return [
 			truncateToWidth(` ${strip}`, width, "…"),
@@ -608,14 +715,18 @@ export function keepFocus(tui: TUI, component: Component): () => void {
 	return release;
 }
 
-/** Open the full-screen subagent chat, starting on `startAgentId` if given. */
+/** How often an open read-only transcript re-reads its session file. */
+const TRANSCRIPT_POLL_MS = 1000;
+
+/** Open the full-screen subagent chat, starting on `startEntryId` (an agent id or a nested entry id) if given. */
 export async function openSubagentChat(
 	ui: ExtensionUIContext,
 	host: ChatHost,
-	startAgentId?: string,
+	startEntryId?: string,
 ): Promise<void> {
 	let releaseFocus: (() => void) | undefined;
 	let releaseWheel: (() => void) | undefined;
+	let follow: ReturnType<typeof setInterval> | undefined;
 	try {
 		await ui.custom<void>(
 			(tui, theme, _keybindings, done) => {
@@ -625,8 +736,11 @@ export async function openSubagentChat(
 					host,
 					paneRegistry(tui, host),
 					() => done(undefined),
-					startAgentId,
+					startEntryId,
 				);
+				// Transcripts have no event stream; their file is followed instead.
+				follow = setInterval(() => view.tick(), TRANSCRIPT_POLL_MS);
+				follow.unref?.();
 				// Deliberately *not* `nonCapturing`: that flag opts out of the very
 				// focus that makes pi's scroller defer to us.
 				releaseFocus = keepFocus(tui, view);
@@ -639,6 +753,7 @@ export async function openSubagentChat(
 			},
 		);
 	} finally {
+		if (follow) clearInterval(follow);
 		releaseWheel?.();
 		releaseFocus?.();
 	}

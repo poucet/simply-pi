@@ -199,6 +199,45 @@ export interface ChatHost {
 	subscribe(agentId: string, listener: (event: RpcEvent) => void): () => void;
 	/** Send text to a child: steer while it is mid-turn, prompt/follow-up otherwise. */
 	send(agentId: string, text: string): Promise<void>;
+	/**
+	 * Everything below a direct child — its children, theirs, and so on — in tree
+	 * order (depth first, each parent before its own children).
+	 *
+	 * Optional: a host that cannot see past its own children shows only those.
+	 */
+	descendants?(agent: ManagedAgent): DescendantView[];
+}
+
+/**
+ * An agent below one of this process's children.
+ *
+ * It runs inside a child's own process, so none of its events reach us: what we
+ * know comes from the registry (identity, parentage, lifecycle status) and from
+ * tailing its session file (turns, cost, latest activity). Read-only by nature —
+ * the only route to it is through its parent.
+ */
+export interface DescendantView {
+	sessionId: string;
+	parentSessionId: string;
+	/** Display name of the parent, for "messages go through …". */
+	parentName: string;
+	name: string;
+	/** Registry status, reconciled against the pid. */
+	status: string;
+	icon: string;
+	/** 1 for a grandchild of this process, 2 below that, and so on. */
+	depth: number;
+	startedAt: number;
+	/** Absent while it is still active. */
+	endedAt?: number;
+	turns: number;
+	cost: number;
+	/** Latest thing it did, from its session file; falls back to its task summary. */
+	activity: string;
+	sessionFile?: string;
+	cwd?: string;
+	model?: string;
+	persona?: string;
 }
 
 export interface AgentSnapshot {

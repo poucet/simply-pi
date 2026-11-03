@@ -30,7 +30,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Spacer, type TUI } from "@earendil-works/pi-tui";
 import type { RpcEvent } from "./rpc.ts";
-import { type LoggedMessage, readChildSessionLog, userMessageText } from "./session-log.ts";
+import { type LoggedMessage, SessionFileTail, loggedMessageOf, userMessageText } from "./session-log.ts";
 
 /** Kitty/iTerm image escapes cannot be composited into an overlay without corrupting it. */
 const TOOL_OPTIONS = { showImages: false } as const;
@@ -55,28 +55,47 @@ export class AgentChatPane {
 	private seenToolCallIds = new Set<string>();
 	private pendingUserTexts = new Map<string, number>();
 	private backfilled = false;
+	private tail: SessionFileTail;
 
 	constructor(
 		readonly agent: PaneAgent,
 		private tui: TUI,
 		private onChange: () => void,
-	) {}
+	) {
+		this.tail = new SessionFileTail(agent.sessionFile);
+	}
 
 	/** Replay everything already on disk. Safe to call once; later calls are ignored. */
 	backfill(): void {
 		if (this.backfilled) return;
 		this.backfilled = true;
+		this.follow();
+		this.onChange();
+	}
 
-		const log = readChildSessionLog(this.agent.sessionFile);
-		this.seenResponseIds = log.responseIds;
+	/**
+	 * Render whatever the session file gained since the last read.
+	 *
+	 * A live pane calls this once, as its backfill, and the RPC stream does the
+	 * rest. A transcript pane — an agent whose events never reach this process —
+	 * calls it on a timer, and the file is all it ever gets. Returns whether
+	 * anything changed, so a poll that found nothing costs no repaint.
+	 */
+	follow(): boolean {
+		const { entries, reset } = this.tail.read();
+		if (reset) this.clear();
+		const messages = entries.map(loggedMessageOf).filter((m) => m !== undefined);
+		this.replay(messages);
+		return reset || messages.length > 0;
+	}
 
-		const openTools = new Map<string, ToolExecutionComponent>();
-		for (const message of log.messages) {
+	private replay(messages: LoggedMessage[]): void {
+		for (const message of messages) {
 			if (message.role === "assistant") {
+				if (typeof message.responseId === "string") this.seenResponseIds.add(message.responseId);
 				this.addAssistant(message);
 				for (const part of message.content ?? []) {
 					if (part?.type !== "toolCall") continue;
-					this.seenToolCallIds.add(part.id);
 					const component = this.addToolCall(part.name, part.id, part.arguments);
 					if (message.stopReason === "aborted" || message.stopReason === "error") {
 						component.updateResult({
@@ -84,14 +103,15 @@ export class AgentChatPane {
 							isError: true,
 						});
 					} else {
-						openTools.set(part.id, component);
+						// Awaiting a result: a later line of the file, or the live stream.
+						this.pendingTools.set(part.id, component);
 					}
 				}
 			} else if (message.role === "toolResult") {
-				const component = openTools.get(message.toolCallId);
+				const component = this.pendingTools.get(message.toolCallId);
 				if (component) {
 					component.updateResult(message);
-					openTools.delete(message.toolCallId);
+					this.pendingTools.delete(message.toolCallId);
 				}
 			} else if (message.role === "user") {
 				const text = userMessageText(message);
@@ -100,9 +120,6 @@ export class AgentChatPane {
 				this.pendingUserTexts.set(text, (this.pendingUserTexts.get(text) ?? 0) + 1);
 			}
 		}
-		// Tool calls still awaiting a result: the live stream will complete them.
-		for (const [id, component] of openTools) this.pendingTools.set(id, component);
-		this.onChange();
 	}
 
 	/** Apply one RPC event from the child. Mirrors interactive mode's event loop. */
@@ -156,8 +173,15 @@ export class AgentChatPane {
 	}
 
 	dispose(): void {
+		this.clear();
+	}
+
+	private clear(): void {
 		this.content.clear();
 		this.pendingTools.clear();
+		this.seenResponseIds.clear();
+		this.seenToolCallIds.clear();
+		this.pendingUserTexts.clear();
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
 	}
@@ -320,6 +344,20 @@ export class ChatPaneRegistry {
 		const unsubscribe = this.subscribe(agent.id, (event) => pane.applyEvent(event));
 		pane.backfill();
 		this.panes.set(agent.id, { pane, unsubscribe });
+		return pane;
+	}
+
+	/**
+	 * A read-only pane for an agent this process gets no events from — a
+	 * descendant running inside a child's own process. Fed only by
+	 * {@link AgentChatPane.follow}; there is nothing to subscribe to.
+	 */
+	transcript(agent: PaneAgent): AgentChatPane {
+		const existing = this.panes.get(agent.id);
+		if (existing) return existing.pane;
+		const pane = new AgentChatPane(agent, this.tui, this.onChange);
+		pane.backfill();
+		this.panes.set(agent.id, { pane, unsubscribe: () => {} });
 		return pane;
 	}
 
