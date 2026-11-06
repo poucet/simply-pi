@@ -27,6 +27,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import mcpExtension from "./mcp/index.ts";
+import shellGuard from "./shell-guard/index.ts";
 import subagents from "./subagents/index.ts";
 
 /** An extension factory as pi itself declares them. */
@@ -39,6 +40,7 @@ type ExtensionFactory = (pi: ExtensionAPI) => void | Promise<void>;
  * default export gives a useless "undefined failed to load".
  */
 const EXTENSIONS: ReadonlyArray<readonly [name: string, install: ExtensionFactory]> = [
+	["shell-guard", shellGuard],
 	["subagents", subagents],
 	["mcp", mcpExtension],
 ];
