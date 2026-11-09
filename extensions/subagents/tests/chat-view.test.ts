@@ -11,6 +11,7 @@ import { test } from "node:test";
 import { ChatPaneRegistry } from "../chat-pane.ts";
 import { SubagentChatView, TextOverlay, captureWheel, switcherLines } from "../chat-view.ts";
 import { TuiAltScreen } from "@earendil-works/pi-tui";
+import { parseMouseReport } from "../mouse-selection.ts";
 import { SwitcherStrip, nestedEntryId } from "../switcher.ts";
 import type { ChatHost, ManagedAgent } from "../types.ts";
 
@@ -202,6 +203,10 @@ const CLICK = "\x1b[<0;10;10M";
  * A view over a pane whose content is `lines` rows tall, on a terminal of
  * `rows` rows that records everything written to it.
  */
+/** What `captureWheel` writes: button and drag reporting, SGR-encoded, and the reverse. */
+const ON = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+const OFF = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
+
 function scrollHarness(rows: number, contentLines = 0) {
 	const writes: string[] = [];
 	const tui: any = {
@@ -280,11 +285,11 @@ test("mouse reports other than the wheel are consumed without side effects", () 
 test("captureWheel owns the mouse in regular mode and gives it back on release", () => {
 	const { tui, writes } = scrollHarness(24);
 	const release = captureWheel(tui);
-	assert.deepEqual(writes, ["\x1b[?1000h\x1b[?1006h"]);
+	assert.deepEqual(writes, [ON]);
 	release();
 	// Idempotent: a double release writes the reset once.
 	release();
-	assert.deepEqual(writes, ["\x1b[?1000h\x1b[?1006h", "\x1b[?1000l\x1b[?1006l"]);
+	assert.deepEqual(writes, [ON, OFF]);
 });
 
 test("captureWheel never touches the mouse in fullscreen mode or unknown TUIs", () => {
@@ -306,14 +311,14 @@ test("switching chats never leaves two wheel captures fighting over the mouse", 
 	const releaseA = captureWheel(tui);
 	const releaseB = captureWheel(tui);
 	assert.deepEqual(writes, [
-		"\x1b[?1000h\x1b[?1006h", // A captures
-		"\x1b[?1000l\x1b[?1006l", // A is released by B's capture
-		"\x1b[?1000h\x1b[?1006h", // B captures
+		ON, // A captures
+		OFF, // A is released by B's capture
+		ON, // B captures
 	]);
 	releaseA(); // already stopped: must not reset B's capture
-	assert.deepEqual(writes, ["\x1b[?1000h\x1b[?1006h", "\x1b[?1000l\x1b[?1006l", "\x1b[?1000h\x1b[?1006h"]);
+	assert.deepEqual(writes, [ON, OFF, ON]);
 	releaseB();
-	assert.deepEqual(writes.at(-1), "\x1b[?1000l\x1b[?1006l");
+	assert.deepEqual(writes.at(-1), OFF);
 });
 
 test("the notes overlay wheels too, and never scrolls above its first line", () => {
@@ -426,3 +431,145 @@ for (const kind of ["live", "read-only"] as const) {
 		}
 	});
 }
+
+// --- mouse selection: drag to select, copy on release -----------------------
+
+/** SGR reports at 1-based screen cell (x, y): press, drag (motion bit 32), release. */
+const press = (x: number, y: number) => `\x1b[<0;${x};${y}M`;
+const drag = (x: number, y: number) => `\x1b[<32;${x};${y}M`;
+const release = (x: number, y: number) => `\x1b[<0;${x};${y}m`;
+/** The text an OSC 52 write puts on the clipboard. */
+const clipboard = (writes: string[]) =>
+	writes
+		.map((w) => /^\x1b\]52;c;([A-Za-z0-9+/=]*)\x07$/.exec(w)?.[1])
+		.filter((b): b is string => b !== undefined)
+		.map((b) => Buffer.from(b, "base64").toString("utf8"));
+const REVERSE = "\x1b[7m";
+const plain = (line: string) => line.replace(/\x1b\[[0-9;]*m/g, "");
+
+test("SGR and X10 mouse reports parse into one zero-based shape", () => {
+	assert.deepEqual(parseMouseReport("\x1b[<0;5;3M"), { type: "press", button: "left", x: 4, y: 2 });
+	assert.deepEqual(parseMouseReport("\x1b[<32;6;3M"), { type: "drag", button: "left", x: 5, y: 2 });
+	assert.deepEqual(parseMouseReport("\x1b[<0;6;3m"), { type: "release", button: "left", x: 5, y: 2 });
+	assert.deepEqual(parseMouseReport("\x1b[<35;1;1M"), { type: "move", button: "none", x: 0, y: 0 });
+	assert.deepEqual(parseMouseReport("\x1b[<2;1;1M"), { type: "press", button: "right", x: 0, y: 0 });
+	assert.deepEqual(parseMouseReport("\x1b[<64;1;1M"), { type: "wheel", button: "none", x: 0, y: 0, wheelDelta: -1 });
+	assert.deepEqual(parseMouseReport("\x1b[<65;1;1M"), { type: "wheel", button: "none", x: 0, y: 0, wheelDelta: 1 });
+	// Horizontal wheel is a wheel that moves nothing.
+	assert.equal(parseMouseReport("\x1b[<66;1;1M")?.wheelDelta, 0);
+	// Modifier bits (shift 4, alt 8, ctrl 16) do not change the button.
+	assert.equal(parseMouseReport("\x1b[<4;1;1M")?.button, "left");
+	const x10 = (code: number, x: number, y: number) =>
+		`\x1b[M${String.fromCharCode(32 + code, 32 + x, 32 + y)}`;
+	assert.deepEqual(parseMouseReport(x10(0, 3, 4)), { type: "press", button: "left", x: 2, y: 3 });
+	assert.deepEqual(parseMouseReport(x10(3, 3, 4)), { type: "release", button: "none", x: 2, y: 3 });
+	assert.equal(parseMouseReport("x"), undefined);
+	assert.equal(parseMouseReport("\x1b[A"), undefined);
+});
+
+test("a drag selects through the scroll offset and copies plain text on release", () => {
+	const { view, pane, writes } = scrollHarness(24, 100);
+	view.render(80);
+	pane.scrollTop = 10;
+	pane.followEnd = false;
+	view.render(80);
+	// Row 1 is the header, so screen row 2 is the first body line: content line 10.
+	// From column 6 of "line 11" to column 4 of "line 13" (exclusive).
+	view.handleInput(press(6, 3));
+	view.handleInput(drag(10, 4));
+	view.handleInput(drag(5, 5));
+	assert.deepEqual(clipboard(writes), [], "nothing is copied before the release");
+	view.handleInput(release(5, 5));
+	assert.deepEqual(clipboard(writes), ["11\nline 12\nline"]);
+});
+
+test("the selection is painted in reverse video and follows the content when scrolled", () => {
+	const { view, pane } = scrollHarness(24, 100);
+	pane.scrollTop = 10;
+	pane.followEnd = false;
+	view.render(80);
+	view.handleInput(press(1, 2)); // content line 10, column 0
+	view.handleInput(release(5, 2)); // to column 4: "line"
+	let frame = view.render(80);
+	assert.ok(frame[1]!.includes(`${REVERSE}line`), frame[1]);
+	assert.ok(!frame[2]!.includes(REVERSE), "only the selected line is painted");
+	// Scroll down two lines: content line 10 is now off the top, nothing painted.
+	view.handleInput(WHEEL_DOWN);
+	view.handleInput(WHEEL_DOWN);
+	frame = view.render(80);
+	assert.ok(!frame.some((line) => line.includes(REVERSE)));
+	// Back up: it is painted on the same text again.
+	view.handleInput(WHEEL_UP);
+	view.handleInput(WHEEL_UP);
+	frame = view.render(80);
+	assert.ok(frame[1]!.includes(`${REVERSE}line`) && plain(frame[1]!).startsWith("line 10"));
+});
+
+test("a drag that scrolls with the wheel keeps its anchor on the text it started on", () => {
+	const { view, pane, writes } = scrollHarness(24, 100);
+	pane.scrollTop = 10;
+	pane.followEnd = false;
+	view.render(80);
+	view.handleInput(press(1, 2)); // line 10
+	view.handleInput(WHEEL_DOWN); // now line 11 is on row 2
+	view.render(80);
+	view.handleInput(release(80, 3)); // row 3 is line 12, past its end
+	assert.deepEqual(clipboard(writes), ["line 10\nline 11\nline 12"]);
+});
+
+test("a click without a drag clears the selection and copies nothing", () => {
+	const { view, writes } = scrollHarness(24, 100);
+	view.render(80);
+	view.handleInput(press(1, 2));
+	view.handleInput(release(4, 2));
+	assert.equal(clipboard(writes).length, 1);
+	view.handleInput(press(3, 5));
+	view.handleInput(release(3, 5));
+	assert.equal(clipboard(writes).length, 1, "a click copies nothing");
+	assert.ok(!view.render(80).some((line) => line.includes(REVERSE)), "and leaves nothing painted");
+});
+
+test("a drag that leaves the body clamps to it; a press outside the body selects nothing", () => {
+	const { view, pane, writes } = scrollHarness(24, 100);
+	pane.scrollTop = 0;
+	pane.followEnd = false;
+	view.render(80);
+	// Press on the header row: no selection, the drag after it does nothing.
+	view.handleInput(press(1, 1));
+	view.handleInput(drag(5, 3));
+	view.handleInput(release(5, 3));
+	assert.deepEqual(clipboard(writes), []);
+	// Press in the body, drag up over the header: clamped to the first body row.
+	view.handleInput(press(7, 3)); // line 1, column 6
+	view.handleInput(release(1, 1)); // clamped to line 0, column 0
+	assert.deepEqual(clipboard(writes), ["line 0\nline 1"]);
+});
+
+test("the fullscreen handleMouse path captures the drag and scrolls with the wheel", () => {
+	const { view, pane, writes } = scrollHarness(24, 100);
+	pane.scrollTop = 5;
+	pane.followEnd = false;
+	view.render(80);
+	const at = (type: string, x: number, y: number, extra = {}) =>
+		view.handleMouse({ type, button: type === "wheel" ? "none" : "left", x, y, ...extra } as any);
+	assert.deepEqual(at("press", 0, 1), { capture: true });
+	at("drag", 3, 1);
+	at("release", 3, 1);
+	assert.deepEqual(clipboard(writes), ["lin"]);
+	assert.equal(at("click", 3, 1), undefined, "a click is not ours to claim");
+	assert.deepEqual(at("wheel", 0, 1, { wheelDelta: 3 }), { handled: true });
+	assert.equal(pane.scrollTop, 8);
+});
+
+test("styled lines copy without escapes and keep their style after the highlight", () => {
+	const { view, pane, writes } = scrollHarness(24, 0);
+	pane.content.addChild({ render: () => ["\x1b[31mred\x1b[0m plain \x1b[32mgreen\x1b[0m   "] });
+	view.render(80);
+	view.handleInput(press(5, 2));
+	view.handleInput(release(80, 2));
+	assert.deepEqual(clipboard(writes), ["plain green"]);
+	const painted = view.render(80)[1]!;
+	// Reverse opens at the range and is re-asserted after the green inside it.
+	assert.ok(painted.startsWith(`\x1b[31mred\x1b[0m ${REVERSE}plain \x1b[32m${REVERSE}green`), painted);
+	assert.equal(plain(painted), "red plain green   ");
+});

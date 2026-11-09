@@ -40,10 +40,14 @@
  * encoding while we are up makes the terminal deliver wheel events to the app
  * instead of scrolling, and `handleInput` turns them into pane scrolls. In
  * fullscreen mode the alt screen already owns the mouse, so no DECSETs are
- * touched there — and the wheel never reaches `handleInput`: the alt screen
- * dispatches it to the overlay under the pointer as a `handleMouse` event and
- * scrolls the hidden main transcript if the overlay declines it, so
- * `handleMouse` routes it to the same pane scroll.
+ * touched there; it dispatches mouse events to the overlay under the pointer
+ * through `handleMouse`, the same handler regular mode feeds.
+ *
+ * Owning the mouse costs the terminal's own click-drag selection, so the chat
+ * view selects for itself (mouse-selection.ts): drag reporting (`?1002h`) is on
+ * with the wheel in regular mode, a left-button drag over the body is painted
+ * in reverse video, and its plain text goes to the clipboard by OSC 52 on
+ * release.
  */
 
 import type { ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
@@ -61,6 +65,16 @@ import {
 	truncateToWidth,
 } from "@earendil-works/pi-tui";
 import { AgentChatPane, ChatPaneRegistry } from "./chat-pane.ts";
+import {
+	type MouseReport,
+	type TextPoint,
+	highlightColumns,
+	orderRange,
+	osc52,
+	parseMouseReport,
+	rangeColumns,
+	selectedText,
+} from "./mouse-selection.ts";
 import {
 	MAIN_ENTRY_ID,
 	SwitcherStrip,
@@ -109,29 +123,10 @@ export function formatCost(cost: number): string {
 /**
  * A wheel event, in pi's own encoding (`TuiAltScreen.parseWheelEvent`):
  * -1 scrolls the content up, +1 scrolls it down, `undefined` is not a wheel.
- *
- * Regular-mode terminals only send these once `captureWheel` has turned on
- * button reporting; the fullscreen TUI sends them because its scroller defers
- * them to the focused overlay — us.
  */
 function parseWheelEvent(data: string): number | undefined {
-	const sgr = /^\x1b\[<(\d+);(\d+);(\d+)[Mm]$/.exec(data);
-	if (sgr) {
-		const button = Number.parseInt(sgr[1]!, 10);
-		if ((button & 64) === 0) return undefined; // not a wheel button
-		const direction = button & 3;
-		if (direction !== 0 && direction !== 1) return undefined;
-		return direction === 0 ? -1 : 1;
-	}
-	// Legacy X10 encoding: `ESC [ M` followed by three raw bytes.
-	if (data.length === 6 && data.startsWith("\x1b[M")) {
-		const button = data.charCodeAt(3) - 32;
-		if ((button & 64) === 0) return undefined;
-		const direction = button & 3;
-		if (direction !== 0 && direction !== 1) return undefined;
-		return direction === 0 ? -1 : 1;
-	}
-	return undefined;
+	const mouse = parseMouseReport(data);
+	return mouse?.type === "wheel" && mouse.wheelDelta ? mouse.wheelDelta : undefined;
 }
 
 /**
@@ -149,7 +144,7 @@ function wheelLines(event: TuiMouseEvent): number | undefined {
 
 /** Any mouse report (SGR or legacy X10), wheel or not. */
 function isMouseReport(data: string): boolean {
-	return /^\x1b\[<\d+;\d+;\d+[Mm]$/.test(data) || (data.length === 6 && data.startsWith("\x1b[M"));
+	return parseMouseReport(data) !== undefined;
 }
 
 /**
@@ -249,6 +244,11 @@ export class SubagentChatView implements Component, Focusable {
 	private _focused = false;
 	private lastBodyHeight = 10;
 	private status?: string;
+	/** Screen row of the first body line, and the content it showed, as of the last frame. */
+	private lastBodyTop = 0;
+	private lastContent: string[] = [];
+	/** A mouse selection in content coordinates, on the entry it was made in. */
+	private selection?: { entryId: string; anchor: TextPoint; focus: TextPoint; dragging: boolean };
 
 	constructor(
 		private tui: TUI,
@@ -369,27 +369,18 @@ export class SubagentChatView implements Component, Focusable {
 		this.tui.requestRender();
 	}
 
-	/** Fullscreen mode's wheel; regular mode's arrives in `handleInput`. */
-	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-		const lines = wheelLines(event);
-		if (lines === undefined) return undefined;
-		this.scroll(lines);
-		return { handled: true };
-	}
-
 	handleInput(data: string): void {
 		const readOnly = this.readOnly;
 		const editorBusy = !readOnly && this.editor.isShowingAutocomplete();
 		const editorText = readOnly ? "" : this.editor.getText();
 
-		// The wheel is pointer input, so it outranks whatever the keyboard focus
-		// is doing — it must move the pane in both TUI modes (see the module
-		// header), never the terminal's own scrollback or the main transcript.
-		const wheel = parseWheelEvent(data);
-		if (wheel !== undefined) return this.scroll(wheel);
-		// Clicks and drags arrive too, once button reporting is on; there is
-		// nothing to do with them, but they must not reach the editor either.
-		if (isMouseReport(data)) return;
+		// Pointer input outranks whatever the keyboard focus is doing. In regular
+		// mode reports arrive here as raw input; never let one reach the editor.
+		const mouse = parseMouseReport(data);
+		if (mouse) {
+			this.handleMouse(mouse);
+			return;
+		}
 
 		// Cooperative focus: anything the strip does not want — a printable
 		// character, or a key that belongs to the pane — falls through below.
@@ -450,6 +441,76 @@ export class SubagentChatView implements Component, Focusable {
 		this.tui.requestRender();
 	}
 
+	/**
+	 * The wheel scrolls the pane; a left-button drag over the body selects text
+	 * and copies it on release; a click without a drag clears the selection.
+	 *
+	 * Fullscreen pi calls this directly with overlay-local cells; regular mode
+	 * reaches it through `handleInput`, where the overlay sits at the top-left of
+	 * the screen, so screen cells are overlay cells.
+	 */
+	handleMouse(event: MouseReport): TuiMouseEventResult | undefined {
+		if (event.type === "wheel") {
+			// Never the terminal's scrollback or the main transcript (module header).
+			if (event.wheelDelta) this.scroll(event.wheelDelta);
+			return { handled: true };
+		}
+		if (event.type === "move" || event.type === "click") return undefined;
+		const selection = this.selection;
+		if (event.type === "press") {
+			const point = event.button === "left" ? this.contentPoint(event, false) : undefined;
+			this.selection = point && { entryId: this.currentId, anchor: point, focus: point, dragging: true };
+			this.tui.requestRender();
+			return point ? { capture: true } : { handled: true };
+		}
+		if (!selection?.dragging) return { handled: true };
+		selection.focus = this.contentPoint(event, true) ?? selection.focus;
+		if (event.type === "release") {
+			selection.dragging = false;
+			const range = orderRange(selection.anchor, selection.focus);
+			if (range) this.copy(selectedText(this.lastContent, range));
+			else this.selection = undefined;
+		}
+		this.tui.requestRender();
+		return { handled: true };
+	}
+
+	/**
+	 * The content position under a pointer, through the scroll offset of the
+	 * last frame. Outside the body: `undefined`, or with `clamp` (a drag that
+	 * left it) the nearest body row.
+	 */
+	private contentPoint(event: MouseReport, clamp: boolean): TextPoint | undefined {
+		const pane = this.pane();
+		const visible = Math.min(this.lastBodyHeight, this.lastContent.length - (pane?.scrollTop ?? 0));
+		if (!pane || visible <= 0) return undefined;
+		let row = event.y - this.lastBodyTop;
+		if (!clamp && (row < 0 || row >= this.lastBodyHeight)) return undefined;
+		row = Math.max(0, Math.min(visible - 1, row));
+		return { line: pane.scrollTop + row, col: Math.max(0, event.x) };
+	}
+
+	private copy(text: string): void {
+		if (!text) return;
+		try {
+			(this.tui.terminal as { write?: (data: string) => void }).write?.(osc52(text));
+		} catch {
+			/* a torn-down terminal cannot take the copy */
+		}
+	}
+
+	/** Paint the selection over the visible body lines, which start at content line `first`. */
+	private highlight(lines: string[], first: number): string[] {
+		const selection = this.selection;
+		if (!selection || selection.entryId !== this.currentId) return lines;
+		const range = orderRange(selection.anchor, selection.focus);
+		if (!range) return lines;
+		return lines.map((line, index) => {
+			const columns = rangeColumns(range, first + index);
+			return columns ? highlightColumns(line, columns[0], columns[1]) : line;
+		});
+	}
+
 	invalidate(): void {
 		this.editor.invalidate();
 		this.pane()?.content.invalidate();
@@ -465,6 +526,8 @@ export class SubagentChatView implements Component, Focusable {
 		const editorLines = entry?.kind === "nested" ? this.renderReadOnlyNotice(width, entry) : this.editor.render(width);
 		const bodyHeight = Math.max(1, rows - header.length - bar.length - editorLines.length);
 		this.lastBodyHeight = bodyHeight;
+		this.lastBodyTop = header.length;
+		this.lastContent = [];
 
 		const body: string[] = [];
 		const pane = this.pane();
@@ -476,7 +539,8 @@ export class SubagentChatView implements Component, Focusable {
 			const content = pane.content.render(width);
 			const maxScroll = Math.max(0, content.length - bodyHeight);
 			pane.scrollTop = pane.followEnd ? maxScroll : Math.min(pane.scrollTop, maxScroll);
-			body.push(...content.slice(pane.scrollTop, pane.scrollTop + bodyHeight));
+			this.lastContent = content;
+			body.push(...this.highlight(content.slice(pane.scrollTop, pane.scrollTop + bodyHeight), pane.scrollTop));
 		}
 		while (body.length < bodyHeight) body.push("");
 
@@ -581,6 +645,10 @@ let activeFocusHold: (() => void) | undefined;
 
 let activeWheelCapture: (() => void) | undefined;
 
+/** Button and drag reporting, SGR-encoded; and the reverse, innermost mode first. */
+const MOUSE_ON = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+const MOUSE_OFF = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
+
 /**
  * Own the mouse wheel for as long as a full-screen overlay is up (regular mode).
  *
@@ -589,9 +657,10 @@ let activeWheelCapture: (() => void) | undefined;
  * overlay's frame, the exact bug this guards against (see the module header).
  * Turning on button reporting (`?1000h`) with SGR encoding (`?1006h`) makes the
  * terminal deliver wheel events to the app instead of scrolling; the overlay's
- * `handleInput` then routes them to the pane. Click-drag selection and terminal
- * link clicking fall back to the terminal's usual shift-bypass while a chat is
- * open, the same trade fullscreen mode makes.
+ * `handleInput` then routes them to the pane. Drag reporting (`?1002h`) adds the
+ * motion of a held button, which the chat view turns into its own text
+ * selection. Terminal link clicking falls back to the terminal's usual
+ * shift-bypass while a chat is open, the same trade fullscreen mode makes.
  *
  * Fullscreen mode must not touch the DECSETs: `TuiAltScreen` owns mouse
  * reporting for the whole session there, and resetting it would break the
@@ -621,13 +690,13 @@ export function captureWheel(tui: TUI): () => void {
 		if (stopped) return;
 		stopped = true;
 		if (activeWheelCapture === release) activeWheelCapture = undefined;
-		write("\x1b[?1000l\x1b[?1006l");
+		write(MOUSE_OFF);
 	}
 
 	// Never leave two captures live; the previous overlay may already be gone.
 	activeWheelCapture?.();
 	activeWheelCapture = release;
-	write("\x1b[?1000h\x1b[?1006h");
+	write(MOUSE_ON);
 	return release;
 }
 
