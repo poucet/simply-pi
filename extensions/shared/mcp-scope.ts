@@ -45,6 +45,15 @@
  *
  * The variable is only honoured when `PI_SUBAGENT=1`, so nothing a user has
  * exported into their own shell can quietly narrow their *own* MCP servers.
+ *
+ * ## Who enforces it
+ *
+ * MCP is pi's built-in extension, which knows nothing of this variable. The
+ * parent enforces the scope by what it loads into the child
+ * (`childExtensionArgs` in subagents/manager.ts): no `builtin:mcp` for an empty
+ * scope, `builtin:mcp` for `"*"`, and for named servers
+ * `subagents/child-mcp.ts`, which builds the builtin with its config narrowed
+ * by `mcpScopeAllows`, reading the scope back through `childMcpScope`.
  */
 
 /**

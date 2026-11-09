@@ -1298,8 +1298,9 @@ export class SubagentManager {
 				...(target.parentSessionId ? { [PARENT_SESSION_ENV]: target.parentSessionId } : {}),
 				[NOTES_ENV]: target.launch.notesPath,
 				[ANSWERS_ENV]: answersDirectory(target.sessionDir),
-				// Which MCP servers this child may boot. Always set, even when empty:
-				// the child's mcp extension reads "unset" as an empty allowlist anyway,
+				// Which MCP servers this child may boot, read by child-mcp.ts (the
+				// extension args above already follow it). Always set, even when empty:
+				// the child reads "unset" as an empty allowlist anyway,
 				// but writing it explicitly keeps a stray `PI_SUBAGENT_MCP` in the
 				// parent's own environment from leaking into children. Per-process by
 				// construction, which is the point: two concurrent children with

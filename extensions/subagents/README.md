@@ -772,6 +772,25 @@ Put `subagents` in `childDeny` to opt a project out of nesting entirely.
 The child's own tools (`report_to_parent`, `shared_notes`, `ask_parent`) come
 from `child-extension.ts`, still passed explicitly with `-e`.
 
+**pi's built-in extensions** (`builtin:mcp`, `builtin:codemode`,
+`builtin:tool-search`, `builtin:llama.cpp`) are inherited like the rest: the
+child runs with `--no-extensions`, which turns built-ins off too, so discovery
+is asked for them by name and they come back as `-e builtin:<name>`, unless
+your `extensions` setting or `childDeny` excludes one. `builtin:mcp` alone
+follows the child's MCP scope (`mcp_servers`):
+
+| Scope | The child gets |
+|---|---|
+| none (the default) | no MCP extension: no servers boot |
+| `["*"]` | `builtin:mcp`: every configured server |
+| named servers | `child-mcp.ts`: the builtin built from its own factory with a config narrowed to those servers, so no other server connects |
+
+pi exposes MCP tools through `codemode`, so a child given servers *and* a
+`tools` allowlist also gets `codemode` in that allowlist; without one, pi
+activates `codemode` itself when a server connects. The MCP tools are then
+called from codemode scripts (`tools.mcp__linear__list_teams({})`), not
+declared directly.
+
 ## Liveness: pi must always be interruptible
 
 **An extension must never be able to make pi uninterruptible.** Extension
