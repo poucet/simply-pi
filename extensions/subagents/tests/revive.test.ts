@@ -584,3 +584,48 @@ test("two concurrent children carry different scopes without interfering", async
 		await f.cleanup();
 	}
 });
+
+// --- pi's built-in extensions -----------------------------------------------
+//
+// A child runs with `--no-extensions`, which also turns pi's built-ins off, so
+// they have to come back through discovery like any other extension. Without
+// them a child given MCP servers had no MCP support and no `codemode`.
+
+test("built-ins are passed through, and never treated as missing files", async () => {
+	const f = fixture({ extensions: ["builtin:codemode", "builtin:tool-search"] });
+	try {
+		// Discovery failed, so the recorded list is replayed untrusted: real paths
+		// are existsSync-checked, but `builtin:<name>` is not a path at all.
+		f.manager.discovery = [];
+		await f.manager.revive("worker");
+		const [argv] = f.argv();
+		const loaded = argv!.filter((a, i) => argv![i - 1] === "-e");
+		assert.deepEqual(loaded.slice(1), ["builtin:codemode", "builtin:tool-search"]);
+	} finally {
+		await f.cleanup();
+	}
+});
+
+test("a child scoped to named servers gets the scoped MCP extension and codemode", async () => {
+	const f = fixture({ mcpScope: ["linear"] });
+	try {
+		f.manager.discovery = ["builtin:codemode", "builtin:mcp"];
+		const agent = f.manager.get("worker")!;
+		agent.launch = { ...agent.launch, tools: ["read", "bash"] };
+		await f.manager.revive("worker");
+		const [argv] = f.argv();
+		const loaded = argv!.filter((a, i) => argv![i - 1] === "-e");
+		assert.ok(!loaded.includes("builtin:mcp"), "the unscoped builtin would boot every server");
+		assert.ok(loaded.some((p) => p.endsWith("child-mcp.ts")));
+		assert.ok(loaded.includes("builtin:codemode"));
+		assert.deepEqual(argv![argv!.indexOf("--tools") + 1]!.split(","), [
+			"read",
+			"bash",
+			"codemode",
+			"report_to_parent",
+			"shared_notes",
+		]);
+	} finally {
+		await f.cleanup();
+	}
+});

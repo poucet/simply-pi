@@ -39,7 +39,7 @@ import {
 	type PendingQuestion,
 	questionFromUpdate,
 } from "./ask.ts";
-import { MCP_SCOPE_ENV, encodeMcpScope, parseMcpScope } from "../shared/mcp-scope.ts";
+import { MCP_SCOPE_ALL, MCP_SCOPE_ENV, encodeMcpScope, parseMcpScope } from "../shared/mcp-scope.ts";
 import { DEFAULT_CHILD_DENY, extensionName, partitionExtensions } from "./deny.ts";
 import {
 	ANSWERS_ENV,
@@ -93,6 +93,76 @@ import {
 import { type MailDecision, type TransitionCause, mailForTransition } from "./transitions.ts";
 
 const CHILD_EXTENSION = fileURLToPath(new URL("./child-extension.ts", import.meta.url));
+/** pi's built-in MCP support narrowed to a child's servers; see child-mcp.ts. */
+const CHILD_MCP_EXTENSION = fileURLToPath(new URL("./child-mcp.ts", import.meta.url));
+
+/**
+ * pi's built-in extensions, by the name `builtin:<name>` loads them under.
+ *
+ * A child is launched with `--no-extensions`, which turns the built-ins off
+ * too, and pi's `DefaultPackageManager` only reports them when told their
+ * names. pi does not export its list, so it is written out here; a name pi
+ * drops is reported by the child as an unknown extension rather than failing.
+ * Without them a child had no MCP, no `codemode` and no `tool_search`, whatever
+ * its MCP scope said.
+ */
+export const PI_BUILTIN_EXTENSIONS = ["llama.cpp", "codemode", "tool-search", "mcp"] as const;
+
+const BUILTIN_PREFIX = "builtin:";
+const BUILTIN_MCP = `${BUILTIN_PREFIX}mcp`;
+const BUILTIN_CODEMODE = `${BUILTIN_PREFIX}codemode`;
+
+/**
+ * The `-e` values a child is launched with, after its own child extension.
+ *
+ * Two things happen here besides passing the inherited list through:
+ *
+ *   - **`builtin:mcp` follows the MCP scope.** No scope: dropped, so the child
+ *     boots no servers. `"*"`: kept, every configured server. Named servers:
+ *     replaced by child-mcp.ts, the same builtin built to boot only those.
+ *     If the user disabled `builtin:mcp`, it is not in the list and nothing
+ *     brings it back.
+ *   - **Built-ins are never `existsSync`-checked.** `builtin:<name>` is not a
+ *     file; the check is only for replayed disk paths that may have moved.
+ */
+export function childExtensionArgs(
+	extensions: readonly string[],
+	mcpScope: readonly string[] | undefined,
+	trustPaths: boolean,
+	exists: (path: string) => boolean = existsSync,
+): string[] {
+	const scope = mcpScope ?? [];
+	const result: string[] = [];
+	for (const extension of extensions) {
+		if (extension === BUILTIN_MCP) {
+			if (scope.length === 0) continue;
+			result.push(scope.includes(MCP_SCOPE_ALL) ? BUILTIN_MCP : CHILD_MCP_EXTENSION);
+		} else if (extension.startsWith(BUILTIN_PREFIX) || trustPaths || exists(extension)) {
+			result.push(extension);
+		}
+	}
+	return result;
+}
+
+/**
+ * The child's `--tools` allowlist, or `undefined` for pi's defaults.
+ *
+ * Our own tools are always re-added, because the allowlist covers extension
+ * tools too. `codemode` is added for a child given MCP servers: pi exposes MCP
+ * tools through `codemode` by default and activates it when a server connects,
+ * but an allowlist without it stops that, and the child is left with servers it
+ * cannot call. Adding it reaches no tool the allowlist excludes: codemode can
+ * call only the active tools plus the MCP tools.
+ */
+export function childToolsArg(
+	tools: readonly string[] | undefined,
+	extensionArgs: readonly string[],
+): string | undefined {
+	if (!tools?.length) return undefined;
+	const hasMcp = extensionArgs.some((arg) => arg === BUILTIN_MCP || arg === CHILD_MCP_EXTENSION);
+	const codemode = hasMcp && extensionArgs.includes(BUILTIN_CODEMODE) ? ["codemode"] : [];
+	return [...new Set([...tools, ...codemode, "report_to_parent", "shared_notes"])].join(",");
+}
 
 /**
  * Ceiling on the parent-context summarization call made during a `compacted`
@@ -1025,6 +1095,9 @@ export class SubagentManager {
 						cwd: ctx.cwd,
 						agentDir,
 						settingsManager,
+						// Reported as `builtin:<name>`, enabled unless the user's
+						// `extensions` setting turns one off; see PI_BUILTIN_EXTENSIONS.
+						builtinExtensions: [...PI_BUILTIN_EXTENSIONS],
 					});
 					return await packageManager.resolve(async () => "skip");
 				})(),
@@ -1199,18 +1272,16 @@ export class SubagentManager {
 		// discovery could not be re-run, where a dead path is genuinely likely.
 		args.push("--no-extensions");
 		args.push("-e", CHILD_EXTENSION); // Never denied: it is how the child talks to us.
-		for (const extension of target.launch.extensions ?? []) {
-			if (target.trustExtensions || existsSync(extension)) args.push("-e", extension);
-		}
+		const extensionArgs = childExtensionArgs(
+			target.launch.extensions ?? [],
+			target.launch.mcpScope,
+			target.trustExtensions === true,
+		);
+		for (const extension of extensionArgs) args.push("-e", extension);
 		if (target.launch.model) args.push("--model", target.launch.model);
 		if (target.launch.thinking) args.push("--thinking", target.launch.thinking);
-		if (target.launch.tools?.length) {
-			// The allowlist covers extension tools too, so re-add our own.
-			args.push(
-				"--tools",
-				[...new Set([...target.launch.tools, "report_to_parent", "shared_notes"])].join(","),
-			);
-		}
+		const tools = childToolsArg(target.launch.tools, extensionArgs);
+		if (tools) args.push("--tools", tools);
 		return new ChildRpc({
 			cwd: target.cwd,
 			args,
