@@ -1,10 +1,5 @@
 .pi/
-.jj-workspaces/
 .vscode/
-.claude/
-SYSTEM.md
-.workspaces/
-.screenshots/
-docs/live/
-docs/simply-chris/
-.pi/agents
+/AGENTS.md
+/AGENTS.project.md
+/.pi/agents
