@@ -707,7 +707,7 @@ machinery does with focus. The wheel and render-height contracts are pinned in
   "maxResumeAttempts": 3,
   "autoRestoreMaxAgeMinutes": 1440,
   "maxOpenAgents": 10,
-  "childDeny": ["mcp", "slack-approval"]
+  "childDeny": ["builtin:mcp", "slack-approval"]
 }
 ```
 
