@@ -40,9 +40,10 @@
  * encoding while we are up makes the terminal deliver wheel events to the app
  * instead of scrolling, and `handleInput` turns them into pane scrolls. In
  * fullscreen mode the alt screen already owns the mouse, so no DECSETs are
- * touched there — but its scroller defers wheel to the focused overlay
- * (tui-alt-screen.js:428), so the same `handleInput` code routes those events
- * too, where they used to die on the floor.
+ * touched there — and the wheel never reaches `handleInput`: the alt screen
+ * dispatches it to the overlay under the pointer as a `handleMouse` event and
+ * scrolls the hidden main transcript if the overlay declines it, so
+ * `handleMouse` routes it to the same pane scroll.
  */
 
 import type { ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
@@ -54,6 +55,8 @@ import {
 	Key,
 	Markdown,
 	type TUI,
+	type TuiMouseEvent,
+	type TuiMouseEventResult,
 	matchesKey,
 	truncateToWidth,
 } from "@earendil-works/pi-tui";
@@ -129,6 +132,19 @@ function parseWheelEvent(data: string): number | undefined {
 		return direction === 0 ? -1 : 1;
 	}
 	return undefined;
+}
+
+/**
+ * The lines a fullscreen-mode wheel event asks to scroll, or `undefined` for
+ * any other mouse event (those are not ours to claim).
+ *
+ * The alt screen never hands the wheel to `handleInput`: it dispatches it to
+ * the overlay under the pointer through `handleMouse`, already accelerated into
+ * `wheelDelta`, and scrolls the main transcript — hidden under the overlay —
+ * when the overlay declines it.
+ */
+function wheelLines(event: TuiMouseEvent): number | undefined {
+	return event.type === "wheel" && event.wheelDelta ? event.wheelDelta : undefined;
 }
 
 /** Any mouse report (SGR or legacy X10), wheel or not. */
@@ -351,6 +367,14 @@ export class SubagentChatView implements Component, Focusable {
 		pane.scrollTop = Math.max(0, pane.scrollTop + lines);
 		pane.followEnd = false;
 		this.tui.requestRender();
+	}
+
+	/** Fullscreen mode's wheel; regular mode's arrives in `handleInput`. */
+	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		const lines = wheelLines(event);
+		if (lines === undefined) return undefined;
+		this.scroll(lines);
+		return { handled: true };
 	}
 
 	handleInput(data: string): void {
@@ -774,6 +798,15 @@ export class TextOverlay implements Component {
 		private done: () => void,
 	) {
 		this.body = new Markdown(text, 1, 0, getMarkdownTheme());
+	}
+
+	/** Same as the chat pane's: fullscreen mode's wheel. */
+	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		const lines = wheelLines(event);
+		if (lines === undefined) return undefined;
+		this.scrollTop = Math.max(0, this.scrollTop + lines);
+		this.tui.requestRender();
+		return { handled: true };
 	}
 
 	handleInput(data: string): void {

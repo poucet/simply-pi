@@ -10,7 +10,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ChatPaneRegistry } from "../chat-pane.ts";
 import { SubagentChatView, TextOverlay, captureWheel, switcherLines } from "../chat-view.ts";
-import { SwitcherStrip } from "../switcher.ts";
+import { TuiAltScreen } from "@earendil-works/pi-tui";
+import { SwitcherStrip, nestedEntryId } from "../switcher.ts";
 import type { ChatHost, ManagedAgent } from "../types.ts";
 
 const DOWN = "\x1b[B";
@@ -327,3 +328,101 @@ test("the notes overlay wheels too, and never scrolls above its first line", () 
 	overlay.handleInput(CLICK);
 	assert.equal(overlay.render(80).length, before);
 });
+
+// --- fullscreen: the alt screen routes the wheel through handleMouse ----------
+
+/**
+ * The real fullscreen renderer, on a terminal that only records what it is sent.
+ *
+ * In fullscreen mode the wheel never reaches `handleInput`: `TuiAltScreen`
+ * parses it and dispatches it to the overlay under the pointer as a
+ * `handleMouse` event, and scrolls the main transcript when the overlay does
+ * not handle it. Only the real dispatch can prove the pane is the one moving.
+ */
+function altScreenHarness() {
+	let send: (data: string) => void = () => {};
+	const terminal: any = {
+		start(onInput: (data: string) => void) {
+			send = onInput;
+		},
+		stop() {},
+		drainInput: async () => {},
+		write() {},
+		columns: 80,
+		rows: 24,
+		kittyProtocolActive: false,
+		moveBy() {},
+		hideCursor() {},
+		showCursor() {},
+		clearLine() {},
+		clearFromCursor() {},
+		clearScreen() {},
+		setTitle() {},
+		setProgress() {},
+		setProgramStatus() {},
+	};
+	const tui: any = new TuiAltScreen(terminal);
+	tui.start();
+	const lead = agent("id-a", "alpha");
+	(lead as any).sessionId = "s-a";
+	const nested: any = {
+		sessionId: "s-n",
+		parentSessionId: "s-a",
+		parentName: "alpha",
+		name: "grand",
+		status: "running",
+		icon: "◐",
+		depth: 1,
+		startedAt: Date.now(),
+		turns: 1,
+		cost: 0,
+		activity: "",
+		sessionFile: "/tmp/does-not-exist-nested.jsonl",
+		cwd: "/tmp",
+	};
+	const host: ChatHost = {
+		agents: () => [lead],
+		descendants: () => [{ ...nested }],
+		unread: () => 0,
+		statusIcon: () => "◐",
+		subscribe: () => () => {},
+		send: async () => {},
+	};
+	const registry = new ChatPaneRegistry(tui, host.subscribe, () => {});
+	const fill = (pane: { content: { addChild(c: unknown): void } }) => {
+		for (let i = 0; i < 100; i++) pane.content.addChild({ render: () => [`line ${i}`], invalidate() {} });
+		return pane;
+	};
+	const live = fill(registry.get(lead));
+	const transcript = fill(
+		registry.transcript({ id: nestedEntryId("s-n"), name: "grand", cwd: "/tmp", sessionFile: nested.sessionFile }),
+	);
+	/** Open `entryId` as the overlay and paint it once, as pi does. */
+	const open = (entryId: string) => {
+		const view = new SubagentChatView(tui, flatTheme, host, registry, () => {}, entryId);
+		tui.showOverlay(view, { anchor: "top-left", width: "100%", maxHeight: "100%" });
+		tui.renderNow?.() ?? tui.doRender?.();
+		return view;
+	};
+	return { tui, send, live, transcript, open, stop: () => tui.stop() };
+}
+
+for (const kind of ["live", "read-only"] as const) {
+	test(`in fullscreen mode the wheel scrolls a ${kind} pane, not the hidden main transcript`, () => {
+		const h = altScreenHarness();
+		try {
+			const pane = kind === "live" ? h.live : h.transcript;
+			h.open(kind === "live" ? "id-a" : nestedEntryId("s-n"));
+			const bottom = pane.scrollTop;
+			assert.ok(bottom > 0, "the pane opened at its end");
+			h.send(WHEEL_UP);
+			assert.ok(pane.scrollTop < bottom, `wheel up moves the pane (was ${bottom}, now ${pane.scrollTop})`);
+			assert.equal(pane.followEnd, false, "and stops following the end");
+			const scrolled = pane.scrollTop;
+			h.send(WHEEL_DOWN);
+			assert.ok(pane.scrollTop > scrolled, "wheel down moves it back");
+		} finally {
+			h.stop();
+		}
+	});
+}
