@@ -5,6 +5,22 @@ format is stated once in SYSTEM.md §2.
 
 ## Unreleased
 
+#### Select and copy text with the mouse in the subagent chat · 2026-11-09 16:31 · yskupksmrzpw
+
+In the subagent chat overlay, drag with the left button over the conversation
+to select it: the range is shown in reverse video, and when you let go its
+plain text (no colours, no trailing padding) is copied to the clipboard by
+OSC 52. A click without a drag clears the selection. The wheel still scrolls the
+pane, and a selection stays on the same text while you scroll. Whole lines in
+between, cut at the columns where you started and stopped. Works in the regular
+and fullscreen TUI. The copy needs a terminal that honours OSC 52 (iTerm2,
+kitty, WezTerm, Ghostty do; macOS Terminal.app does not, and tmux needs
+`set-clipboard on`).
+
+#### The wheel scrolls subagent chats in fullscreen mode · 2026-11-09 16:34 · pzsnzplyzlov
+
+- In fullscreen mode (pi's default), the mouse wheel now scrolls the open subagent chat, both a direct child's live chat and a grandchild's read-only transcript, and the shared-notes overlay. Before, the wheel scrolled the main conversation hidden under the overlay, so the pane looked stuck.
+
 #### Subagents of subagents show up in the switcher, as a tree · 2026-11-03 09:00 · zutorqvptnyz
 
 The list below the editor now shows every agent in the tree, not only your
