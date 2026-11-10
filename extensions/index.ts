@@ -26,6 +26,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import docPanel from "./doc-panel/index.ts";
 import mcpExtension from "./mcp/index.ts";
 import shellGuard from "./shell-guard/index.ts";
 import subagents from "./subagents/index.ts";
@@ -43,6 +44,7 @@ const EXTENSIONS: ReadonlyArray<readonly [name: string, install: ExtensionFactor
 	["shell-guard", shellGuard],
 	["subagents", subagents],
 	["mcp", mcpExtension],
+	["doc-panel", docPanel],
 ];
 
 export default async function simplyPi(pi: ExtensionAPI): Promise<void> {
