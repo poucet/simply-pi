@@ -160,8 +160,9 @@ export class SubagentsEditor extends CustomEditor {
 
 			// The same expression the base class pushes for an unscrolled border, built
 			// the same way (per-character theming, hence `.repeat` outside the call).
-			// The other thing that can be in that slot is pi's `─── ↑ 3 more ` indicator,
-			// which `borderSlot` hands back as a `lead` to draw around.
+			// The other thing that can be in that slot is pi's centred `↑ 3 more`
+			// indicator; `borderSlot` hands back the rule up to the end of its label as a
+			// `lead`, and the bar draws only into the rule after it.
 			const slot = borderSlot(lines, this.borderColor("─").repeat(width), "top", stripTerminalSequences);
 			if (slot === undefined) return lines;
 

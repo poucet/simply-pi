@@ -240,6 +240,24 @@ test("a scroll indicator is kept and drawn around, not painted over", () => {
 	});
 });
 
+test("pi's centred indicator is found, and everything up to its label kept", () => {
+	// What pi-tui draws whenever the label has a column of rule either side of it:
+	// ` ↑ 13 more ` centred, the left run floor((width - label) / 2) long. The lead
+	// runs to the end of the label, so the bar can only ever draw to its right.
+	const centred = `${"─".repeat(24)} ↑ 13 more ${"─".repeat(25)}`;
+	assert.deepEqual(borderSlot([centred, "text      ", RULE], RULE, "top"), {
+		index: 0,
+		lead: `${"─".repeat(24)} ↑ 13 more `,
+	});
+	// The narrowest centred form: one column of rule on each side.
+	assert.deepEqual(borderSlot(["─ ↓ 3 more ─", "text  ", RULE], RULE, "top"), {
+		index: 0,
+		lead: "─ ↓ 3 more ",
+	});
+	// A label with no rule before it is not pi's border.
+	assert.equal(borderSlot([" ↑ 3 more ───", "text  ", RULE], RULE, "top"), undefined);
+});
+
 test("an indicator pi had to truncate is left entirely alone", () => {
 	// Below about fourteen columns `createScrollBorder` cuts its own text and ends
 	// the line with `...`. There is no free space to compose into, and no reliable

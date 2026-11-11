@@ -16,9 +16,9 @@
  *     as more footer.
  *   - **Right**, because the left edge of the box is where the text starts and
  *     where the eye tracks while typing — and because pi's own scroll indicator
- *     is anchored hard left. Putting the badges at the far end means the two
- *     want different columns, which is what lets them share a line at all (see
- *     {@link borderSlot}).
+ *     sits in the middle of the rule. Putting the badges at the far end means
+ *     the two want different columns, which is what lets them share a line at
+ *     all (see {@link borderSlot}).
  *
  * Only the extension that owns `ctx.ui.setEditorComponent()` can draw there (it
  * is a single slot; the last caller silently wins), so publishers put badges in
@@ -89,14 +89,14 @@
  * completion menu. {@link borderSlot} therefore *matches* the border rather than
  * indexing to it, from whichever end it was asked for.
  *
- * The interesting case is pi replacing a border with `─── ↑ 3 more ─────` when
- * the input is taller than the box. That indicator is anchored left and the bar
- * is anchored right, so unlike the left-aligned version of this bar the two do
- * not want the same columns: `borderSlot` hands back the indicator as a `lead`
- * to preserve, the bar composes into the columns after it, and both survive. If
- * the residual width is too small for even one chip the composer returns
- * `undefined` and the indicator is left exactly as pi drew it — losing "3 more"
- * is a far worse trade than losing a badge row.
+ * The interesting case is pi replacing a border with `──── ↑ 3 more ────`, the
+ * label centred, when the input is taller than the box. The bar is anchored
+ * right, so the two never want the same columns: `borderSlot` hands back
+ * everything up to the end of the label as a `lead` to preserve, the bar
+ * composes into the right-hand run of rule after it, and both survive with the
+ * label where pi put it. If that run is too short for even one chip the
+ * composer returns `undefined` and the indicator is left exactly as pi drew it —
+ * losing "3 more" is a far worse trade than losing a badge row.
  */
 
 import type { BadgeGroup, StatusBadge } from "../shared/border-badges.ts";
@@ -136,9 +136,14 @@ const SIDE_GAP = 1;
 /**
  * pi's scroll indicator, with the theming taken off.
  *
- * `createScrollBorder` (pi-tui `components/editor.js`) builds exactly
- * `` `─── ${direction} ${hiddenLineCount} more ` `` and pads the remainder with
- * rule characters, so the capture group is the run that must be preserved. The
+ * `createScrollBorder` (pi-tui `components/editor.js`) centres the label
+ * `` ` ${direction} ${hiddenLineCount} more ` `` between two runs of rule, the
+ * left one `floor((width - label) / 2)` long and so at least one character.
+ * Where that does not fit (`label + 2 > width`) it falls back to the
+ * left-aligned `` `─── ${direction} ${hiddenLineCount} more ` `` padded with rule,
+ * which is also what older pi drew everywhere. One pattern takes both: the
+ * capture group is the left rule plus the label, the run that must be preserved,
+ * and the bar only ever draws into the rule after it. The
  * `─*$` tail is what makes this safe to run over ordinary content lines while
  * scanning: pi pads those with **spaces** to the content width, so a line of the
  * user's own text cannot match unless they typed the indicator verbatim *and*
@@ -148,7 +153,7 @@ const SIDE_GAP = 1;
  * the line with `...`; that does not match, so the bar stays away — which is the
  * right answer anyway, since there is no room for it there.
  */
-const SCROLL_INDICATOR = /^(─── [↑↓] \d+ more )─*$/;
+const SCROLL_INDICATOR = /^(─+ [↑↓] \d+ more )─*$/;
 
 /** Which of the editor's two horizontal rules to look for. */
 export type BorderEnd = "top" | "bottom";

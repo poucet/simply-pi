@@ -142,7 +142,7 @@ test("a broken strip can never break the input box", () => {
 // Driven through the **real** `Editor.render` rather than a fake of its output.
 // The whole mechanism rests on three facts about pi-tui internals — that a
 // border is `borderColor("─").repeat(width)`, that a scroll indicator replaces
-// one, and that the indicator's exact text is `─── ↑ 3 more ` — and a
+// one, and that the indicator is ` ↑ 3 more ` centred in the rule — and a
 // hand-rolled fixture would keep passing after any of those changed, which is
 // precisely the failure it needs to catch.
 
@@ -260,9 +260,9 @@ test("a scrolled bottom border is not a collision: the bar still draws", (t) => 
 });
 
 test("a scrolled top border keeps its indicator and its badges", (t) => {
-	// The collision that used to suppress the bar. "3 more" is the only sign the
-	// user's own text continues above the fold, and it is anchored hard left; the
-	// badges are anchored hard right, so both fit and neither is a trade.
+	// "3 more" is the only sign the user's own text continues above the fold. pi
+	// centres it in the rule; the badges are anchored hard right, in the run of
+	// rule after it, so both fit and neither is a trade.
 	resetForTests();
 	const h = barHarness();
 	t.after(() => {
@@ -274,8 +274,11 @@ test("a scrolled top border keeps its indicator and its badges", (t) => {
 	// scrolled: everything above the last few lines is hidden.
 	h.editor.setText(Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n"));
 
+	// pi-tui's `createScrollBorder` centres ` ↑ 13 more ` (11 columns) in 60:
+	// floor((60 - 11) / 2) = 24 columns of rule before it, 25 after. The bar takes
+	// the end of those 25 and leaves the label exactly where pi put it.
 	const first = h.editor.render(60)[0]!;
-	assert.match(first, /^─── ↑ \d+ more ─+ mcp ───$/, `indicator and badges did not share the line: ${first}`);
+	assert.equal(first, `${"─".repeat(24)} ↑ 13 more ${"─".repeat(17)} mcp ───`);
 	assert.equal(columns(first), 60, "the shared border stopped being exactly one line wide");
 });
 
@@ -295,6 +298,48 @@ test("no room beside the indicator and the indicator keeps the whole line", (t) 
 	assert.match(first, /↑ \d+ more/, "expected the top border to be scrolled");
 	assert.ok(!first.includes("mcp"), "the bar crowded the scroll indicator");
 	assert.equal(columns(first), 24);
+});
+
+test("at every width the centred indicator survives intact, and badges only follow it", (t) => {
+	// Swept against pi's real output, so a change to where pi puts the label fails
+	// here rather than in a terminal. Whatever the bar does, the line up to the end
+	// of the label is pi's own, byte for byte; badges appear only after it, and only
+	// with rule between; and the line is exactly the border's width.
+	resetForTests();
+	const h = barHarness();
+	t.after(() => {
+		h.dispose();
+		resetForTests();
+	});
+	publish("mcp", [
+		{ text: "mcp", tone: "label" },
+		{ text: "3/4", tone: "ok" },
+		{ text: "1 failed", tone: "error" },
+	]);
+	h.editor.setText(Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n"));
+	resetForTests();
+	const bare = Array.from({ length: 121 }, (_, width) => (width < 14 ? "" : h.editor.render(width)[0]!));
+	publish("mcp", [
+		{ text: "mcp", tone: "label" },
+		{ text: "3/4", tone: "ok" },
+		{ text: "1 failed", tone: "error" },
+	]);
+	let drew = 0;
+	for (let width = 14; width <= 120; width++) {
+		const first = h.editor.render(width)[0]!;
+		const indicator = /^─+ ↑ \d+ more /.exec(bare[width]!)?.[0];
+		assert.ok(indicator, `width ${width}: expected pi to draw a scroll indicator: ${bare[width]}`);
+		assert.equal(columns(first), width, `width ${width}`);
+		assert.ok(first.startsWith(indicator), `width ${width}: the indicator was disturbed: ${first}`);
+		const after = first.slice(indicator.length);
+		if (after.includes("mcp")) {
+			drew++;
+			assert.match(after, /^─{4,} /, `width ${width}: the badges crowded the indicator: ${first}`);
+		} else {
+			assert.equal(first, bare[width], `width ${width}: no badges, so the line is pi's own`);
+		}
+	}
+	assert.ok(drew > 0, "the bar never drew beside the indicator");
 });
 
 test("a themed scroll indicator is re-painted, never sliced", (t) => {
@@ -318,10 +363,13 @@ test("a themed scroll indicator is re-painted, never sliced", (t) => {
 	assert.ok(first.length > 60, "expected the border to carry escape sequences");
 	// Every escape in the line is a complete one: no `\x1b[` left dangling, and no
 	// stray fragment of `2m`/`22m` loose in the text.
-	assert.match(stripTerminalSequences(first), /^─── ↑ \d+ more ─+ mcp ───$/);
+	assert.equal(stripTerminalSequences(first), `${"─".repeat(24)} ↑ 13 more ${"─".repeat(17)} mcp ───`);
 	// …and the indicator is still themed as one whole run, rather than having been
 	// re-emitted bare or cut halfway through its opening sequence.
-	assert.match(first, /^\x1b\[2m─── ↑ \d+ more \x1b\[22m/, `the indicator lost its colour: ${JSON.stringify(first)}`);
+	assert.ok(
+		first.startsWith(`\x1b[2m${"─".repeat(24)} ↑ 13 more \x1b[22m`),
+		`the indicator lost its colour: ${JSON.stringify(first)}`,
+	);
 });
 
 test("a painted theme produces coloured chips of the right visible width", (t) => {
