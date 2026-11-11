@@ -16,6 +16,10 @@
  *     hidden so the chat under it can be read, focused to scroll and switch
  *     tabs (`tab`/`shift+tab`, `1`–`9`, `x` closes one). Esc hands the
  *     keyboard back and leaves the panel shown.
+ *   - In fullscreen, a left click on the panel focuses it (on a tab's name,
+ *     also switches to that tab), and a left click in the chat while it is
+ *     focused hands the keyboard back, as Esc does. The regular screen reports
+ *     no mouse, so there it is keys only.
  *
  * The panel is an overlay, and while it is shown the chat (transcript, editor,
  * footer) is narrowed to the columns left of it (see `split.ts`), so nothing is
@@ -40,11 +44,13 @@ import { type ChatSplit, installSplit, panelWidth } from "./split.ts";
 import { type FileWatch, watchFile } from "./watch.ts";
 
 /**
- * The one global key. pi-tui takes `ctrl+shift+d` for its debug dump before
- * any shortcut or component sees it (the same dump is `/debug`), so it is
- * claimed through `ui.onTerminalInput`, which runs first: see {@link claimKey}.
+ * The one global key. It must work wherever the focus is, and the editor binds
+ * `ctrl+]` itself (jump forward to a character), so it is claimed through
+ * `ui.onTerminalInput`, which runs before any shortcut or component: see
+ * {@link claimKey}. Terminals send it as `\x1d` (GS), or `\x1b[93;5u` with the
+ * kitty protocol; pi-tui's `matchesKey` knows both.
  */
-export const KEYS: PanelKeys = { cycle: "ctrl+shift+d" };
+export const KEYS: PanelKeys = { cycle: "ctrl+]" };
 
 /** Above this the file is refused: the panel is for docs, not logs. */
 const MAX_BYTES = 2 * 1024 * 1024;
@@ -124,8 +130,11 @@ export class DocPanelController {
 					this.open = created;
 					const open = created;
 					// Reserve the panel's columns only while this panel is the open one and showing.
-					open.split = installSplit(tui, (width) =>
-						this.open === open && open.handle && !open.handle.isHidden() ? panelWidth(width) : 0,
+					open.split = installSplit(
+						tui,
+						(width) => (this.open === open && open.handle && !open.handle.isHidden() ? panelWidth(width) : 0),
+						// A click in the chat hands the keyboard back, as Esc does.
+						{ onChatPress: () => open.handle?.isFocused() && open.handle.unfocus() },
 					);
 					return Object.assign(panel, {
 						// Runs however the panel goes away: `/doc close`, a session
@@ -303,10 +312,10 @@ function describe(error: unknown): string {
 
 /**
  * Claim {@link KEYS}`.cycle` for `controller`. A terminal input listener sees
- * every key before pi-tui's own global keys (its debug dump is this one), the
- * editor's shortcuts and the focused component, so the key does one thing
- * wherever the focus is, and the panel never sees it as well. The release of
- * the key (kitty protocol) is swallowed too, so it can't reach the debug dump.
+ * every key before pi-tui's own global keys, the editor's shortcuts and the
+ * focused component, so the key does one thing wherever the focus is, and the
+ * panel never sees it as well. The release of the key (kitty protocol) is
+ * swallowed too, so it can't reach the editor either.
  */
 export function claimKey(ui: Ui & Pick<ExtensionContext["ui"], "onTerminalInput">, controller: DocPanelController): () => void {
 	return ui.onTerminalInput((data) => {

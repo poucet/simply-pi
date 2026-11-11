@@ -320,7 +320,7 @@ function newPanel(rows: () => number) {
 		hide: () => {},
 		closeTab: () => {},
 		requestRender: () => {},
-		keys: { cycle: "ctrl+shift+d" },
+		keys: { cycle: "ctrl+]" },
 	});
 }
 

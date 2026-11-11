@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type MarkdownTheme, visibleWidth } from "@earendil-works/pi-tui";
-import { DocPanel, type DocPanelOptions, borderLine, tabStrip } from "../panel.ts";
+import { DocPanel, type DocPanelOptions, borderLine, layoutTabStrip, tabStrip } from "../panel.ts";
 
 const stripAnsi = (text: string) => text.replace(/\x1b\[[0-9;]*m/g, "");
 const identity = (text: string) => text;
@@ -43,7 +43,7 @@ function makePanel({ rows = 12, focused = false, ...overrides }: Partial<Omit<Do
 			panel.remove(index);
 		},
 		requestRender: () => calls.renders++,
-		keys: { cycle: "ctrl+shift+d" },
+		keys: { cycle: "ctrl+]" },
 		...overrides,
 	});
 	return { panel, calls };
@@ -79,7 +79,7 @@ test("the border names the file and the scroll position", () => {
 	// The chip pads its own text, so the name sits two spaces in from the rule.
 	assert.match(lines[0]!, /^╭─ {2}STEPS\.md {2}─+╮$/);
 	assert.match(lines.at(-1)!, /1–8\/\d+/);
-	assert.match(lines.at(-1)!, /ctrl\+shift\+d focus/);
+	assert.match(lines.at(-1)!, /ctrl\+\] focus/);
 	assert.match(lines[1]!, /│ Steps for Chris/);
 });
 
@@ -89,7 +89,7 @@ test("focused, the hints change to the scroll keys", () => {
 	const bottom = panel.render(120).at(-1)!;
 	assert.match(bottom, /esc back/);
 	assert.match(bottom, /x close/);
-	assert.match(bottom, /ctrl\+shift\+d hide/);
+	assert.match(bottom, /ctrl\+\] hide/);
 	assert.doesNotMatch(bottom, /tab\/1–9/, "one tab: nothing to switch to");
 	panel.open("/d/B.md", "B.md", "# B");
 	assert.match(panel.render(140).at(-1)!, /tab\/1–9 switch/);
@@ -198,7 +198,7 @@ test("x closes the current tab and selects its neighbour", () => {
 test("the cycle key, if it ever reaches the focused panel, hides it", () => {
 	const { panel, calls } = makePanel({ rows: 10, focused: true });
 	panel.open("/d/A.md", "A.md", "# A");
-	panel.handleInput("\x1b[100;6u");
+	panel.handleInput("\x1d");
 	assert.equal(calls.hide, 1);
 	assert.equal(calls.unfocus, 0);
 });
@@ -232,6 +232,21 @@ test("on a narrow panel the strip keeps the current tab, its nearest neighbours 
 			assert.ok(visibleWidth(strip) <= room, `room ${room}, current ${current}: ${JSON.stringify(strip)}`);
 		}
 	}
+});
+
+test("the strip says where each tab it shows landed, so a click maps back to the tab", () => {
+	const names = ["one.md", "two.md", "three.md", "four.md", "five.md"];
+	const paint = (n: string) => `[${n}]`;
+	const plain = (t: string) => t;
+	const { text, spans } = layoutTabStrip(names, 2, 32, paint, plain);
+	assert.equal(text, " two.md [three.md] four.md  3/5 ");
+	assert.deepEqual(
+		spans.map((s) => [names[s.index], text.slice(s.start, s.end)]),
+		[["two.md", " two.md "], ["three.md", "[three.md]"], ["four.md", " four.md "]],
+		"the count is no tab",
+	);
+	assert.deepEqual(layoutTabStrip(names, 0, 6, paint, plain).spans.map((s) => s.index), [0], "a cut name alone");
+	assert.deepEqual(layoutTabStrip([], 0, 40, paint, plain), { text: "", spans: [] });
 });
 
 for (const width of [100, 40, 24, 12]) {

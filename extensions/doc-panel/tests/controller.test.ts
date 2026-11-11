@@ -194,15 +194,19 @@ test("the cycle key is claimed before pi sees it, wherever the focus is, and its
 	await tick();
 
 	assert.equal(listener!("x"), undefined, "other keys pass through");
-	assert.deepEqual(listener!("\x1b[100;6u"), { consume: true }, "ctrl+shift+d, kitty protocol");
+	assert.equal(listener!("\x1b[100;6u"), undefined, "ctrl+shift+d is left to pi's debug dump");
+	assert.deepEqual(listener!("\x1b[93;5u"), { consume: true }, "ctrl+], kitty protocol");
 	await tick();
 	assert.equal(state.focused, true);
-	assert.deepEqual(listener!("\x1b[100;6:3u"), { consume: true }, "its release");
+	assert.deepEqual(listener!("\x1b[93;5:3u"), { consume: true }, "its release");
 	await tick();
 	assert.equal(state.focused, true, "a release does not step the cycle");
-	listener!("\x1b[100;6u");
+	assert.deepEqual(listener!("\x1d"), { consume: true }, "ctrl+], legacy (GS)");
 	await tick();
 	assert.equal(state.hidden, true);
+	listener!("\x1b[27;5;93~"); // xterm modifyOtherKeys
+	await tick();
+	assert.equal(state.hidden, false);
 	release();
 	assert.equal(listener, undefined);
 	controller.close();

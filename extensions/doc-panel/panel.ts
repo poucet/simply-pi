@@ -3,8 +3,8 @@
  * bordered box the height of the terminal.
  *
  * It is shown as a **non-capturing** overlay, so it never takes the keyboard by
- * itself; the extension hands it focus on a shortcut and it gives focus back on
- * Esc. Each tab keeps its own text, file state and scroll position; the panel
+ * itself; the extension hands it focus on a shortcut, pi on a click (see
+ * `handleMouse`), and it gives focus back on Esc. Each tab keeps its own text, file state and scroll position; the panel
  * knows nothing of files, and the controller feeds it text. Everything it
  * needs from pi is injected (the theme, the markdown theme,
  * the terminal height, whether it has focus), so it renders to plain lines in a
@@ -108,6 +108,8 @@ export class DocPanel implements Component {
 	/** Body height of the last render, for page-sized scrolling between renders. */
 	private bodyHeight = 1;
 	private frameCache?: { key: string; lines: string[] };
+	/** Where the last frame drew each tab in the top border, in panel columns. */
+	private tabSpans: TabSpan[] = [];
 
 	constructor(private readonly options: DocPanelOptions) {}
 
@@ -248,11 +250,25 @@ export class DocPanel implements Component {
 		// into some other component, and Esc is always one key away.
 	}
 
-	/** Wheel scrolling, in fullscreen mode (the only mode that reports the mouse). Never takes focus. */
+	/**
+	 * The mouse, in fullscreen mode (the only mode that reports it). The wheel
+	 * scrolls without taking focus. A left click focuses the panel, and on a
+	 * tab's name in the top border also switches to that tab. It answers the
+	 * click, not the press, so a drag still selects the panel's text: pi
+	 * synthesizes the click when a press is released where it started.
+	 */
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-		if (event.type !== "wheel" || !event.wheelDelta) return undefined;
-		this.scrollBy(event.wheelDelta);
-		return { handled: true };
+		if (event.type === "wheel") {
+			if (!event.wheelDelta) return undefined;
+			this.scrollBy(event.wheelDelta);
+			return { handled: true };
+		}
+		if (event.type !== "click" || event.button !== "left") return undefined;
+		if (event.y === 0) {
+			const span = this.tabSpans.find((s) => event.x >= s.start && event.x < s.end);
+			if (span) this.select(span.index);
+		}
+		return { handled: true, focus: true };
 	}
 
 	scrollBy(lines: number): void {
@@ -318,7 +334,7 @@ export class DocPanel implements Component {
 		// borderLine spends 4 columns on rules around a lone piece, 3 more per extra one.
 		const room = width - 2 - 4;
 		const stripRoom = (reserve: number) =>
-			tabStrip(
+			layoutTabStrip(
 				this.tabs.map((t) => t.name),
 				this.current,
 				room - reserve,
@@ -329,7 +345,9 @@ export class DocPanel implements Component {
 		const reserve = stateChip ? visibleWidth(stateChip) + 3 : 0;
 		const needed = tab ? visibleWidth(tab.name) + 2 + (this.tabs.length > 1 ? `${this.tabs.length}`.length * 2 + 3 : 0) : 0;
 		const strip = stripRoom(room - reserve >= needed ? reserve : 0);
-		const top = [strip || this.chip("doc", "label")];
+		// borderLine starts the first piece after "╭─ ".
+		this.tabSpans = strip.spans.map((span) => ({ ...span, start: span.start + 3, end: span.end + 3 }));
+		const top = [strip.text || this.chip("doc", "label")];
 		if (stateChip) top.push(stateChip);
 
 		// Bottom border: position, then what the keys do in this focus state.
@@ -373,6 +391,13 @@ export class DocPanel implements Component {
 	}
 }
 
+/** Where one tab's cell sits in a tab strip: columns `start` to `end` (exclusive), from the strip's first column. */
+export interface TabSpan {
+	index: number;
+	start: number;
+	end: number;
+}
+
 /**
  * The tab strip, at most `room` columns: every name if they all fit, else the
  * current tab and as many neighbours as fit, nearest first, followed by an
@@ -388,21 +413,46 @@ export function tabStrip(
 	paintCurrent: (name: string) => string,
 	paintOther: (text: string) => string,
 ): string {
+	return layoutTabStrip(names, current, room, paintCurrent, paintOther).text;
+}
+
+/** {@link tabStrip}, with where each tab shown landed, so a click can be mapped back to its tab. */
+export function layoutTabStrip(
+	names: readonly string[],
+	current: number,
+	room: number,
+	paintCurrent: (name: string) => string,
+	paintOther: (text: string) => string,
+): { text: string; spans: TabSpan[] } {
 	// Below 3 columns not even "…" fits between the padding.
-	if (names.length === 0 || room < 3) return "";
+	if (names.length === 0 || room < 3) return { text: "", spans: [] };
 	const cell = (i: number) => (i === current ? paintCurrent(names[i]!) : paintOther(` ${names[i]} `));
+	const cells = (from: number, to: number, tail = "") => {
+		let text = "";
+		const spans: TabSpan[] = [];
+		for (let i = from; i <= to; i++) {
+			const start = visibleWidth(text);
+			text += cell(i);
+			spans.push({ index: i, start, end: visibleWidth(text) });
+		}
+		return { text: text + tail, spans };
+	};
+	const only = (name: string, tail = "") => {
+		const text = paintCurrent(name);
+		return { text: text + tail, spans: [{ index: current, start: 0, end: visibleWidth(text) }] };
+	};
 	const widths = names.map((name) => visibleWidth(name) + 2);
 	const total = widths.reduce((sum, w) => sum + w, 0);
-	if (total <= room) return names.map((_, i) => cell(i)).join("");
+	if (total <= room) return cells(0, names.length - 1);
 
 	const count = paintOther(` ${current + 1}/${names.length} `);
 	const countWidth = visibleWidth(count);
 	let left = room - countWidth;
 	// No room for the count beside even a cut name: the name alone.
 	if (left < Math.min(widths[current]!, 4)) {
-		return paintCurrent(truncateToWidth(names[current]!, Math.max(1, room - 2), "…"));
+		return only(truncateToWidth(names[current]!, Math.max(1, room - 2), "…"));
 	}
-	if (widths[current]! > left) return paintCurrent(truncateToWidth(names[current]!, left - 2, "…")) + count;
+	if (widths[current]! > left) return only(truncateToWidth(names[current]!, left - 2, "…"), count);
 
 	let from = current;
 	let to = current;
@@ -418,9 +468,7 @@ export function tabStrip(
 			grew = true;
 		}
 	}
-	let strip = "";
-	for (let i = from; i <= to; i++) strip += cell(i);
-	return strip + count;
+	return cells(from, to, count);
 }
 
 /**

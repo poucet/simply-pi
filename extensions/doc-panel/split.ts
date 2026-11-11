@@ -16,6 +16,11 @@
  *     render at the narrower width. The overlay is composited over the blank
  *     columns afterwards, at the full width.
  *
+ * In fullscreen the split's root also tells the caller when a left press lands
+ * in the chat (see {@link SplitOptions}`.onChatPress`). It is the only way an
+ * extension learns of it: pi-tui's own viewport listener consumes every mouse
+ * report before an extension's terminal input listener would see it.
+ *
  * pi only swaps renderers when no overlay is open (`switchTuiMode`), so the
  * renderer this was installed on stays the one drawing until the panel goes.
  *
@@ -24,7 +29,7 @@
  * the full width for that frame.
  */
 
-import { type Component, HStack, isViewportTUI, type TUI } from "@earendil-works/pi-tui";
+import { type Component, HStack, isViewportTUI, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
 
 /** The panel never takes the chat below this many columns, unless it would itself go under half. */
 const MIN_CHAT = 30;
@@ -58,6 +63,16 @@ export function panelWidth(columns: number): number {
  */
 export type Reserve = (width: number) => number;
 
+export interface SplitOptions {
+	/**
+	 * A left press landed in the chat and nothing in it claimed the press.
+	 * Fullscreen only. Told, never asked: the press goes on to the chat
+	 * (selection, the click that follows) as if this were not here. pi's
+	 * editor answers only the click, so a press on it arrives here too.
+	 */
+	onChatPress?: () => void;
+}
+
 export interface ChatSplit {
 	/** Which renderer path is in use. */
 	readonly kind: "layout" | "render";
@@ -87,6 +102,7 @@ class SplitRoot extends HStack {
 		readonly chat: Component,
 		private readonly reserve: Reserve,
 		private readonly columns: () => number,
+		private readonly onChatPress?: () => void,
 	) {
 		super([
 			{ component: chat, basis: 0, grow: 1 },
@@ -104,6 +120,22 @@ class SplitRoot extends HStack {
 		return super.render(width);
 	}
 
+	/**
+	 * pi-tui offers the layout's components a mouse event deepest first, so this
+	 * root sees one only when no component in the chat took it. It takes none
+	 * either: forwarding to the children as a Container does would offer them
+	 * the event twice.
+	 */
+	override handleMouse(event: TuiMouseEvent): undefined {
+		if (event.type !== "press" || event.button !== "left") return undefined;
+		try {
+			this.onChatPress?.();
+		} catch {
+			// The chat's press must never fail because of the panel.
+		}
+		return undefined;
+	}
+
 	[LAYOUT_NODE](): object {
 		this.sync(this.columns());
 		return stackLayoutNode ? stackLayoutNode.call(this) : {};
@@ -118,11 +150,11 @@ const INSTALLED = Symbol.for("simply-pi/doc-panel/split");
  * `remove()`. Returns undefined, touching nothing, when this TUI offers no way
  * to do it; the caller then just has an overlay.
  */
-export function installSplit(tui: TUI, reserve: Reserve): ChatSplit | undefined {
+export function installSplit(tui: TUI, reserve: Reserve, options: SplitOptions = {}): ChatSplit | undefined {
 	try {
 		const t = tui as SplitTui & { [INSTALLED]?: ChatSplit };
 		t[INSTALLED]?.remove();
-		const split = isViewportTUI(tui) ? splitLayout(t, reserve) : splitRender(t, reserve);
+		const split = isViewportTUI(tui) ? splitLayout(t, reserve, options) : splitRender(t, reserve);
 		if (split) t[INSTALLED] = split;
 		return split;
 	} catch {
@@ -130,11 +162,15 @@ export function installSplit(tui: TUI, reserve: Reserve): ChatSplit | undefined 
 	}
 }
 
-function splitLayout(tui: SplitTui & { [INSTALLED]?: ChatSplit }, reserve: Reserve): ChatSplit | undefined {
+function splitLayout(
+	tui: SplitTui & { [INSTALLED]?: ChatSplit },
+	reserve: Reserve,
+	options: SplitOptions,
+): ChatSplit | undefined {
 	const original = tui.layoutRoot;
 	if (!original || typeof tui.setLayoutRoot !== "function") return undefined;
 	if (typeof stackLayoutNode !== "function") return undefined;
-	const root = new SplitRoot(original, reserve, () => tui.terminal.columns);
+	const root = new SplitRoot(original, reserve, () => tui.terminal.columns, options.onChatPress);
 	tui.setLayoutRoot(root);
 	let removed = false;
 	const split: ChatSplit = {
