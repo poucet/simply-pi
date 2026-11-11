@@ -14,8 +14,10 @@
  *     be read; {@link KEYS}`.focus` gives the panel the keyboard for scrolling,
  *     and Esc hands it back.
  *
- * The panel is an overlay, not a layout split: pi has no way to narrow the chat,
- * so the chat keeps its full width and the panel covers its right half. It is
+ * The panel is an overlay, and while it is shown the chat (transcript, editor,
+ * footer) is narrowed to the columns left of it (see `split.ts`), so nothing is
+ * covered; hiding or closing it gives the chat its full width back. Where the
+ * chat can't be narrowed the panel falls back to covering its right half. It is
  * shown **non-capturing**, so opening it, even from a tool call mid-turn, never
  * takes the keyboard from the editor.
  *
@@ -30,6 +32,7 @@ import type { OverlayHandle, TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { hasRenderer, publish, subscribe } from "../shared/border-badges.ts";
 import { DocPanel, type DocState, type PanelKeys } from "./panel.ts";
+import { type ChatSplit, installSplit, panelWidth } from "./split.ts";
 import { type FileWatch, watchFile } from "./watch.ts";
 
 /**
@@ -53,6 +56,7 @@ interface OpenPanel {
 	tui: TUI;
 	handle?: OverlayHandle;
 	watch?: FileWatch;
+	split?: ChatSplit;
 	close: () => void;
 }
 
@@ -107,10 +111,16 @@ export class DocPanelController {
 					created = { path, panel, tui, close: () => done() };
 					created.watch = this.watch(created);
 					this.open = created;
+					const open = created;
+					// Reserve the panel's columns only while this panel is the open one and showing.
+					open.split = installSplit(tui, (width) =>
+						this.open === open && open.handle && !open.handle.isHidden() ? panelWidth(width) : 0,
+					);
 					return Object.assign(panel, {
 						// Runs however the panel goes away: `/doc close`, a session
 						// shutdown, or pi tearing its overlays down.
 						dispose: () => {
+							created?.split?.remove();
 							created?.watch?.close();
 							if (this.open === created) this.open = undefined;
 							this.publishBadge();
@@ -121,15 +131,21 @@ export class DocPanelController {
 					overlay: true,
 					overlayOptions: {
 						anchor: "right-center",
-						width: "50%",
-						minWidth: 40,
+						// A getter, read on every frame, so the overlay and the columns
+						// the split keeps free agree after a resize.
+						get width() {
+							return panelWidth(created?.tui.terminal.columns ?? 80);
+						},
 						// The panel renders the terminal's height itself; this only
 						// stops a stray extra line from ever pushing it off-screen.
 						maxHeight: "100%",
 						nonCapturing: true,
 					},
 					onHandle: (handle) => {
-						if (created) created.handle = handle;
+						if (!created) return;
+						created.handle = handle;
+						// The split reads the handle; draw once more now that it can.
+						created.tui.requestRender();
 					},
 				},
 			)

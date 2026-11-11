@@ -47,7 +47,12 @@ function fakeUi() {
 		notes: [] as string[],
 		status: undefined as string | undefined,
 	};
-	const tui = { terminal: { rows: 20, columns: 200 }, requestRender: () => {} };
+	// `render` reports the width it was asked for, so a test can see the split narrow it.
+	const tui: { terminal: { rows: number; columns: number }; requestRender(): void; render(width: number): string[] } = {
+		terminal: { rows: 20, columns: 200 },
+		requestRender: () => {},
+		render: (width) => [String(width)],
+	};
 	const ui = {
 		notify: (message: string) => state.notes.push(message),
 		setStatus: (_key: string, text: string | undefined) => {
@@ -84,7 +89,7 @@ function fakeUi() {
 				queueMicrotask(() => options.onHandle?.(handle));
 			}),
 	};
-	return { ui: ui as any, state };
+	return { ui: ui as any, state, tui };
 }
 
 function scratch(): string {
@@ -108,7 +113,7 @@ test("show opens one non-capturing right-hand overlay, and a second show swaps t
 	assert.equal(state.shown, 1);
 	assert.equal(state.options?.nonCapturing, true);
 	assert.equal(state.options?.anchor, "right-center");
-	assert.equal(state.options?.width, "50%");
+	assert.equal(state.options?.width, 100, "half of the 200-column terminal");
 	assert.equal(state.component!.render(100).length, 20, "fills the terminal height");
 	assert.match(state.component!.render(100).join("\n"), /Alpha/);
 
@@ -200,4 +205,29 @@ test("a watch on a directory that does not exist reports instead of throwing", (
 	const watch = watchFile("/nonexistent-dir/doc.md", () => {}, (error) => errors.push(error));
 	watch.close();
 	assert.equal(errors.length, 1);
+});
+
+test("the chat is narrowed by the panel's width while it shows, and gets it back when hidden or closed", async () => {
+	const dir = scratch();
+	writeFileSync(join(dir, "a.md"), "# Alpha\n");
+	const { ui, state, tui } = fakeUi();
+	const controller = new DocPanelController();
+	await controller.show(ui, join(dir, "a.md"));
+	await tick();
+	assert.deepEqual(tui.render(200), ["100"], "chat in the left 100 columns, panel in the right 100");
+
+	tui.terminal.columns = 120;
+	assert.equal(state.options?.width, 60, "the overlay follows a resize");
+	assert.deepEqual(tui.render(120), ["60"], "and so does the chat");
+
+	await controller.toggle(ui);
+	assert.equal(state.hidden, true);
+	assert.deepEqual(tui.render(120), ["120"], "hidden: full width");
+
+	await controller.toggle(ui);
+	assert.deepEqual(tui.render(120), ["60"]);
+
+	controller.close();
+	assert.deepEqual(tui.render(120), ["120"], "closed: full width");
+	rmSync(dir, { recursive: true, force: true });
 });
