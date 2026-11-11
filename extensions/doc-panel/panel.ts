@@ -20,14 +20,21 @@
  *
  * Every line is exactly `width` columns: an overlay line that is short lets the
  * chat underneath show through, and one that is long gets cut mid-escape.
+ *
+ * An image (see `render.ts`) covers several body lines. Its placement goes at
+ * the start of the first of them that is on screen, cut to the rows that are,
+ * so it never draws over the border when scrolled half out of view. Each tab
+ * has its own image store, so two tabs never share a Kitty image id; a tab that
+ * is not current puts no placement in the frame, and pi-tui deletes the
+ * placements of lines that change, so switching tabs leaves no image behind.
  */
 
+import { dirname } from "node:path";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
 	type Component,
 	Key,
 	type KeyId,
-	Markdown,
 	type MarkdownTheme,
 	type TuiMouseEvent,
 	type TuiMouseEventResult,
@@ -36,6 +43,8 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import { RECOMMENDED_TOKENS, type BadgeTone } from "../shared/border-badges.ts";
+import { ImageStore } from "./images.ts";
+import { type RenderedDoc, renderDoc } from "./render.ts";
 
 /** What the panel shows, apart from the text itself. */
 export type DocState =
@@ -62,8 +71,10 @@ interface Tab extends DocTab {
 	state: DocState;
 	/** First visible body line. Clamped at render time, since the height can change under it. */
 	scroll: number;
-	/** Rendered body for the last inner width; cleared when the text or theme changes. */
-	body?: { width: number; lines: string[] };
+	/** Rendered body for the last inner width and image height; cleared when the text or theme changes. */
+	body?: { width: number; imageRows: number; doc: RenderedDoc };
+	/** This doc's images, with Kitty ids of their own. */
+	images: ImageStore;
 }
 
 export interface DocPanelOptions {
@@ -86,17 +97,19 @@ export interface DocPanelOptions {
 /** Lines of padding between the border and the text, each side. */
 const PAD = 1;
 
+/** An image is at most this share of the body's height, so the text around it stays in view. */
+const IMAGE_HEIGHT_SHARE = 2 / 3;
+
+const NO_BODY: RenderedDoc = { lines: [], images: [] };
+
 export class DocPanel implements Component {
 	private tabs: Tab[] = [];
 	private current = 0;
-	private markdown: Markdown;
 	/** Body height of the last render, for page-sized scrolling between renders. */
 	private bodyHeight = 1;
 	private frameCache?: { key: string; lines: string[] };
 
-	constructor(private readonly options: DocPanelOptions) {
-		this.markdown = this.makeMarkdown();
-	}
+	constructor(private readonly options: DocPanelOptions) {}
 
 	/** The open docs, in tab order. */
 	get docs(): readonly DocTab[] {
@@ -121,7 +134,7 @@ export class DocPanel implements Component {
 	open(key: string, name: string, text: string, state: DocState = { kind: "ok" }): number {
 		let index = this.indexOf(key);
 		if (index < 0) {
-			this.tabs.push({ key, name, text, state, scroll: 0 });
+			this.tabs.push({ key, name, text, state, scroll: 0, images: new ImageStore() });
 			index = this.tabs.length - 1;
 		} else {
 			this.update(key, text, state);
@@ -139,8 +152,10 @@ export class DocPanel implements Component {
 	update(key: string, text: string | undefined, state: DocState = { kind: "ok" }): void {
 		const tab = this.tabs[this.indexOf(key)];
 		if (!tab) return;
-		if (text !== undefined && text !== tab.text) {
+		if (text !== undefined) {
 			tab.text = text;
+			// Rendered again even when the text is the same: a save is also when
+			// an image the doc shows gets looked at again.
 			tab.body = undefined;
 		}
 		tab.state = state;
@@ -170,9 +185,12 @@ export class DocPanel implements Component {
 
 	invalidate(): void {
 		// A theme change: the markdown theme holds colour functions, so it is
-		// rebuilt rather than trusted.
-		this.markdown = this.makeMarkdown();
-		for (const tab of this.tabs) tab.body = undefined;
+		// asked for again on the next render. Images are drawn again too: pi
+		// invalidates when it learns the terminal's cell size.
+		for (const tab of this.tabs) {
+			tab.body = undefined;
+			tab.images.invalidate();
+		}
 		this.frameCache = undefined;
 	}
 
@@ -180,10 +198,11 @@ export class DocPanel implements Component {
 		const rows = Math.max(1, this.options.rows());
 		const focused = this.options.isFocused();
 		const tab = this.tabs[this.current];
-		const body = tab && width > 2 * (1 + PAD) ? this.bodyLines(tab, width - 2 * (1 + PAD)) : [];
 		const bodyHeight = Math.max(0, rows - 2);
+		const imageRows = Math.max(1, Math.floor(bodyHeight * IMAGE_HEIGHT_SHARE));
+		const body = tab && width > 2 * (1 + PAD) ? this.body(tab, width - 2 * (1 + PAD), imageRows) : NO_BODY;
 		this.bodyHeight = Math.max(1, bodyHeight);
-		const scroll = tab ? (tab.scroll = clamp(tab.scroll, 0, Math.max(0, body.length - bodyHeight))) : 0;
+		const scroll = tab ? (tab.scroll = clamp(tab.scroll, 0, Math.max(0, body.lines.length - bodyHeight))) : 0;
 
 		const key = `${width}|${rows}|${focused}|${scroll}`;
 		if (this.frameCache?.key === key) return this.frameCache.lines;
@@ -239,7 +258,7 @@ export class DocPanel implements Component {
 		const tab = this.tabs[this.current];
 		if (!tab) return;
 		// Clamped against the last render; render() clamps again for the real height.
-		const total = tab.body?.lines.length ?? 0;
+		const total = tab.body?.doc.lines.length ?? 0;
 		const next = clamp(line, 0, Math.max(0, total - this.bodyHeight));
 		if (next === tab.scroll) return;
 		tab.scroll = next;
@@ -251,24 +270,30 @@ export class DocPanel implements Component {
 		this.options.requestRender();
 	}
 
-	private makeMarkdown(): Markdown {
-		return new Markdown("", 0, 0, this.options.markdownTheme());
+	/**
+	 * The body of one doc, rendered `width` columns wide with images at most
+	 * `imageRows` tall: the one seam between the frame and the markdown. Relative
+	 * image paths start at the doc's directory (a tab's key is its path).
+	 */
+	private body(tab: Tab, width: number, imageRows: number): RenderedDoc {
+		const cached = tab.body;
+		if (cached?.width === width && cached.imageRows === imageRows) return cached.doc;
+		const { theme } = this.options;
+		const doc =
+			tab.text.trim() === ""
+				? { lines: [theme.fg("muted", "(empty file)")], images: [] }
+				: renderDoc(tab.text, width, {
+						theme,
+						md: this.options.markdownTheme(),
+						baseDir: dirname(tab.key),
+						images: tab.images,
+						maxImageRows: imageRows,
+					});
+		tab.body = { width, imageRows, doc };
+		return doc;
 	}
 
-	/** The body of one doc, rendered `width` columns wide: the one seam between the frame and the markdown. */
-	private bodyLines(tab: Tab, width: number): string[] {
-		if (tab.body?.width === width) return tab.body.lines;
-		let lines: string[];
-		if (tab.text.trim() === "") lines = [this.options.theme.fg("muted", "(empty file)")];
-		else {
-			this.markdown.setText(tab.text);
-			lines = this.markdown.render(width);
-		}
-		tab.body = { width, lines };
-		return lines;
-	}
-
-	private frame(width: number, rows: number, focused: boolean, body: string[], bodyHeight: number, scroll: number): string[] {
+	private frame(width: number, rows: number, focused: boolean, body: RenderedDoc, bodyHeight: number, scroll: number): string[] {
 		const { theme, keys } = this.options;
 		const rule = (text: string) => theme.fg(focused ? "borderAccent" : "border", text);
 		if (width < 4) return Array.from({ length: rows }, () => " ".repeat(width));
@@ -302,9 +327,10 @@ export class DocPanel implements Component {
 		if (stateChip) top.push(stateChip);
 
 		// Bottom border: position, then what the keys do in this focus state.
-		const first = body.length === 0 ? 0 : scroll + 1;
-		const last = Math.min(body.length, scroll + bodyHeight);
-		const bottom: string[] = [this.chip(`${first}–${last}/${body.length}`, "neutral")];
+		const total = body.lines.length;
+		const first = total === 0 ? 0 : scroll + 1;
+		const last = Math.min(total, scroll + bodyHeight);
+		const bottom: string[] = [this.chip(`${first}–${last}/${total}`, "neutral")];
 		if (focused) {
 			// "esc back" first: on a narrow panel it is the hint that must survive.
 			bottom.push(hint("esc back"), hint("↑↓ j/k · PgUp/PgDn · g/G"));
@@ -318,10 +344,8 @@ export class DocPanel implements Component {
 		const side = rule("│") + " ".repeat(PAD);
 		const sideEnd = " ".repeat(PAD) + rule("│");
 		const lines = [borderLine(width, "╭", "╮", top, rule)];
-		for (let i = 0; i < bodyHeight; i++) {
-			const line = body[scroll + i] ?? "";
-			lines.push(side + fit(line, inner) + sideEnd);
-		}
+		const end = scroll + bodyHeight;
+		for (let row = scroll; row < end; row++) lines.push(side + fit(bodyRow(body, row, scroll, end), inner) + sideEnd);
 		if (rows >= 2) lines.push(borderLine(width, "╰", "╯", bottom, rule));
 		return lines.slice(0, rows);
 	}
@@ -391,6 +415,16 @@ export function tabStrip(
 	let strip = "";
 	for (let i = from; i <= to; i++) strip += cell(i);
 	return strip + count;
+}
+
+/**
+ * Body line `row` of a frame showing rows `scroll`..`end - 1`. An image's
+ * placement goes on its first row on screen, cut to the rows on screen.
+ */
+function bodyRow(body: RenderedDoc, row: number, scroll: number, end: number): string {
+	const line = body.lines[row] ?? "";
+	const image = body.images.find((m) => row === Math.max(m.row, scroll) && row < m.row + m.rows);
+	return image ? line + image.sequence(row - image.row, Math.min(image.row + image.rows, end) - row) : line;
 }
 
 /** Exactly `width` columns: cut with an ellipsis if long, padded with spaces if short. */
