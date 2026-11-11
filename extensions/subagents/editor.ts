@@ -32,6 +32,7 @@ import {
 	type EditorTheme,
 	Key,
 	type TUI,
+	getKeybindings,
 	matchesKey,
 	stripTerminalSequences,
 	visibleWidth,
@@ -44,6 +45,7 @@ import {
 	type StatusBadge,
 } from "../shared/border-badges.ts";
 import { type BarPainter, borderSlot, composeBar } from "./badge-bar.ts";
+import { moveToLineEnd, peekHistory, shouldHoldDown } from "./history-guard.ts";
 import { type SwitcherStrip, shouldEnterStrip } from "./switcher.ts";
 
 /**
@@ -254,7 +256,30 @@ export class SubagentsEditor extends CustomEditor {
 				/* nothing left to do but keep typing */
 			}
 		}
+		if (this.holdDown(data)) return;
 		super.handleInput(data);
+	}
+
+	/**
+	 * Keep `↓` from emptying the box by stepping past the newest history entry
+	 * (see history-guard.ts). Matched with the same keybinding lookup the base
+	 * class uses, so a rebound cursor-down is guarded too. True when the key was
+	 * handled here; any doubt or error answers false and the base class runs.
+	 */
+	private holdDown(data: string): boolean {
+		try {
+			if (!getKeybindings().matches(data, "tui.editor.cursorDown")) return false;
+			const hold = shouldHoldDown({
+				textEmpty: this.getText().length === 0,
+				autocompleteOpen: this.isShowingAutocomplete(),
+				history: peekHistory(this),
+			});
+			if (!hold || !moveToLineEnd(this)) return false;
+			this.tui.requestRender();
+			return true;
+		} catch {
+			return false;
+		}
 	}
 }
 

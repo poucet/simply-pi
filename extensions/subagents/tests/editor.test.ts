@@ -53,10 +53,42 @@ test("history browsing still works through the wrapper", () => {
 	editor.addToHistory("older prompt");
 	editor.handleInput(UP);
 	assert.equal(editor.getText(), "older prompt");
-	// The buffer is not empty any more, so down is history-forward, not the strip.
+	// The buffer is not empty any more, so down is not the strip; and stepping
+	// past the newest entry would empty the box, so it stays put.
 	editor.handleInput(DOWN);
 	assert.equal(strip.focused, false);
-	assert.equal(editor.getText(), "");
+	assert.equal(editor.getText(), "older prompt");
+});
+
+test("down past the newest history entry never empties the box", () => {
+	const { editor, strip } = harness(["a"]);
+	const long = ["first line of a long prompt", "second line", "third line"].join("\n");
+	editor.addToHistory(long);
+	editor.handleInput(UP);
+	assert.equal(editor.getText(), long);
+	// Read down to the bottom, then keep pressing.
+	for (let i = 0; i < 6; i++) editor.handleInput(DOWN);
+	assert.equal(editor.getText(), long);
+	assert.equal(strip.focused, false);
+	const cursor = editor.getCursor();
+	assert.deepEqual(cursor, { line: 2, col: "third line".length });
+});
+
+test("down still steps between history entries and back to a typed draft", () => {
+	const { editor } = harness(["a"]);
+	editor.addToHistory("older");
+	editor.addToHistory("newer");
+	editor.setText("my draft");
+	// Up from column 0 of the first line enters history.
+	editor.handleInput("\x01"); // ctrl+a: start of line
+	editor.handleInput(UP);
+	assert.equal(editor.getText(), "newer");
+	editor.handleInput(UP);
+	assert.equal(editor.getText(), "older");
+	editor.handleInput(DOWN);
+	assert.equal(editor.getText(), "newer");
+	editor.handleInput(DOWN);
+	assert.equal(editor.getText(), "my draft");
 });
 
 test("down does nothing special when there are no subagents", () => {
