@@ -1,19 +1,22 @@
 /**
- * The side panel: one markdown file, rendered, in a bordered box the height of
- * the terminal.
+ * The side panel: markdown files, one tab each, the current one rendered in a
+ * bordered box the height of the terminal.
  *
  * It is shown as a **non-capturing** overlay, so it never takes the keyboard by
  * itself; the extension hands it focus on a shortcut and it gives focus back on
- * Esc. Everything it needs from pi is injected (the theme, the markdown theme,
+ * Esc. Each tab keeps its own text, file state and scroll position; the panel
+ * knows nothing of files, and the controller feeds it text. Everything it
+ * needs from pi is injected (the theme, the markdown theme,
  * the terminal height, whether it has focus), so it renders to plain lines in a
  * test with no terminal at all.
  *
  * Layout, for a panel `width` columns wide and `rows` tall:
  *
- *     ╭─ NAME ─ deleted ───────────────╮     top border: file name, file state
- *     │ rendered markdown, scrolled    │     rows - 2 body lines, 1 column of
- *     │ …                              │     padding inside each side
- *     ╰─ 12–40/120 ─ alt+l scroll ─────╯     bottom border: position, key hints
+ *     ╭─ A.md  B.md  C.md ─ deleted ───╮     top border: tab strip (current one
+ *     │ rendered markdown, scrolled    │     highlighted), current file's state
+ *     │ …                              │     rows - 2 body lines, 1 column of
+ *     │                                │     padding inside each side
+ *     ╰─ 12–40/120 ─ … focus ──────────╯     bottom border: position, key hints
  *
  * Every line is exactly `width` columns: an overlay line that is short lets the
  * chat underneath show through, and one that is long gets cut mid-escape.
@@ -44,10 +47,23 @@ export type DocState =
 
 /** The keys the panel answers to, named once so the border hints can't drift from the handlers. */
 export interface PanelKeys {
-	/** Global: focus the panel (and, while focused, give focus back). */
-	focus: KeyId;
-	/** Global: hide or show the panel. */
-	toggle: KeyId;
+	/** Global: step the panel hidden → shown → focused → hidden. */
+	cycle: KeyId;
+}
+
+/** One open doc. `key` identifies it to the controller (its absolute path); `name` is what the tab says. */
+export interface DocTab {
+	readonly key: string;
+	readonly name: string;
+}
+
+interface Tab extends DocTab {
+	text: string;
+	state: DocState;
+	/** First visible body line. Clamped at render time, since the height can change under it. */
+	scroll: number;
+	/** Rendered body for the last inner width; cleared when the text or theme changes. */
+	body?: { width: number; lines: string[] };
 }
 
 export interface DocPanelOptions {
@@ -61,6 +77,8 @@ export interface DocPanelOptions {
 	unfocus: () => void;
 	/** Hide the panel without closing it. */
 	hide: () => void;
+	/** Close tab `index` (the `x` key). The controller owns the file watch, so it removes the tab. */
+	closeTab: (index: number) => void;
 	requestRender: () => void;
 	keys: PanelKeys;
 }
@@ -69,82 +87,129 @@ export interface DocPanelOptions {
 const PAD = 1;
 
 export class DocPanel implements Component {
-	private name = "";
-	private text = "";
-	private state: DocState = { kind: "ok" };
+	private tabs: Tab[] = [];
+	private current = 0;
 	private markdown: Markdown;
-	/** First visible body line. Clamped at render time, since the height can change under it. */
-	private scroll = 0;
 	/** Body height of the last render, for page-sized scrolling between renders. */
 	private bodyHeight = 1;
-	/** Rendered markdown for the last inner width; cleared when the text or theme changes. */
-	private bodyCache?: { width: number; lines: string[] };
 	private frameCache?: { key: string; lines: string[] };
 
 	constructor(private readonly options: DocPanelOptions) {
 		this.markdown = this.makeMarkdown();
 	}
 
-	/** Show a different file. Scroll goes back to the top. */
-	setDoc(name: string, text: string, state: DocState = { kind: "ok" }): void {
-		this.name = name;
-		this.scroll = 0;
-		this.setContent(text, state);
+	/** The open docs, in tab order. */
+	get docs(): readonly DocTab[] {
+		return this.tabs;
+	}
+
+	/** Index of the current tab; meaningless while there are none. */
+	get currentIndex(): number {
+		return this.current;
+	}
+
+	/** The tab showing `key`, or -1. */
+	indexOf(key: string): number {
+		return this.tabs.findIndex((tab) => tab.key === key);
 	}
 
 	/**
-	 * New text and state for the same file (a reload). The scroll position is
-	 * kept, so a doc that is being written does not jump back to the top on
-	 * every save.
+	 * Show `key` and make it the current tab: a new tab at the end, or, if it is
+	 * already open, its tab with the new text (scroll kept, as for a reload).
+	 * Returns its index.
 	 */
-	setContent(text: string, state: DocState = { kind: "ok" }): void {
-		if (text !== this.text) {
-			this.text = text;
-			this.markdown.setText(text);
-			this.bodyCache = undefined;
+	open(key: string, name: string, text: string, state: DocState = { kind: "ok" }): number {
+		let index = this.indexOf(key);
+		if (index < 0) {
+			this.tabs.push({ key, name, text, state, scroll: 0 });
+			index = this.tabs.length - 1;
+		} else {
+			this.update(key, text, state);
 		}
-		this.state = state;
-		this.frameCache = undefined;
-		this.options.requestRender();
+		this.select(index);
+		return index;
 	}
 
-	/** Keep the text, change only what the border says about the file. */
-	setState(state: DocState): void {
-		this.setContent(this.text, state);
+	/**
+	 * New text and state for an open doc (a reload); `text` undefined keeps the
+	 * last text and changes only what the border says about the file. The
+	 * scroll position is kept, so a doc that is being written does not jump
+	 * back to the top on every save. Unknown keys are ignored.
+	 */
+	update(key: string, text: string | undefined, state: DocState = { kind: "ok" }): void {
+		const tab = this.tabs[this.indexOf(key)];
+		if (!tab) return;
+		if (text !== undefined && text !== tab.text) {
+			tab.text = text;
+			tab.body = undefined;
+		}
+		tab.state = state;
+		this.changed();
+	}
+
+	/** Make tab `index` current; out of range is ignored. */
+	select(index: number): void {
+		if (index < 0 || index >= this.tabs.length) return;
+		this.current = index;
+		this.changed();
+	}
+
+	/** Step to the next (`1`) or previous (`-1`) tab, wrapping. */
+	step(delta: number): void {
+		const count = this.tabs.length;
+		if (count > 1) this.select((((this.current + delta) % count) + count) % count);
+	}
+
+	/** Drop tab `index`. The current tab stays current; closing it selects its right-hand neighbour, or the new last. */
+	remove(index: number): void {
+		if (index < 0 || index >= this.tabs.length) return;
+		this.tabs.splice(index, 1);
+		if (index < this.current || this.current >= this.tabs.length) this.current = Math.max(0, this.current - 1);
+		this.changed();
 	}
 
 	invalidate(): void {
 		// A theme change: the markdown theme holds colour functions, so it is
 		// rebuilt rather than trusted.
 		this.markdown = this.makeMarkdown();
-		this.bodyCache = undefined;
+		for (const tab of this.tabs) tab.body = undefined;
 		this.frameCache = undefined;
 	}
 
 	render(width: number): string[] {
 		const rows = Math.max(1, this.options.rows());
 		const focused = this.options.isFocused();
-		const body = width > 2 * (1 + PAD) ? this.bodyLines(width - 2 * (1 + PAD)) : [];
+		const tab = this.tabs[this.current];
+		const body = tab && width > 2 * (1 + PAD) ? this.bodyLines(tab, width - 2 * (1 + PAD)) : [];
 		const bodyHeight = Math.max(0, rows - 2);
 		this.bodyHeight = Math.max(1, bodyHeight);
-		this.scroll = clamp(this.scroll, 0, Math.max(0, body.length - bodyHeight));
+		const scroll = tab ? (tab.scroll = clamp(tab.scroll, 0, Math.max(0, body.length - bodyHeight))) : 0;
 
-		const key = `${width}|${rows}|${focused}|${this.scroll}`;
+		const key = `${width}|${rows}|${focused}|${scroll}`;
 		if (this.frameCache?.key === key) return this.frameCache.lines;
 
-		const lines = this.frame(width, rows, focused, body, bodyHeight);
+		const lines = this.frame(width, rows, focused, body, bodyHeight, scroll);
 		this.frameCache = { key, lines };
 		return lines;
 	}
 
 	handleInput(data: string): void {
 		const { keys } = this.options;
-		if (matchesKey(data, Key.escape) || matchesKey(data, keys.focus)) {
+		if (matchesKey(data, Key.escape)) {
 			this.options.unfocus();
 			return;
 		}
-		if (matchesKey(data, keys.toggle)) {
+		// The cycle key is taken before any component sees it (see index.ts), so
+		// this only runs if that failed; focused → hidden is its step either way.
+		if (matchesKey(data, keys.cycle)) {
 			this.options.hide();
+			return;
+		}
+		if (matchesKey(data, Key.tab)) return this.step(1);
+		if (matchesKey(data, Key.shift("tab"))) return this.step(-1);
+		if (/^[1-9]$/.test(data)) return this.select(Number(data) - 1);
+		if (data === "x") {
+			if (this.tabs.length > 0) this.options.closeTab(this.current);
 			return;
 		}
 		const page = Math.max(1, this.bodyHeight - 1);
@@ -166,49 +231,87 @@ export class DocPanel implements Component {
 	}
 
 	scrollBy(lines: number): void {
-		this.scrollTo(this.scroll + lines);
+		const tab = this.tabs[this.current];
+		if (tab) this.scrollTo(tab.scroll + lines);
 	}
 
 	scrollTo(line: number): void {
+		const tab = this.tabs[this.current];
+		if (!tab) return;
 		// Clamped against the last render; render() clamps again for the real height.
-		const total = this.bodyCache?.lines.length ?? 0;
+		const total = tab.body?.lines.length ?? 0;
 		const next = clamp(line, 0, Math.max(0, total - this.bodyHeight));
-		if (next === this.scroll) return;
-		this.scroll = next;
+		if (next === tab.scroll) return;
+		tab.scroll = next;
+		this.options.requestRender();
+	}
+
+	private changed(): void {
+		this.frameCache = undefined;
 		this.options.requestRender();
 	}
 
 	private makeMarkdown(): Markdown {
-		return new Markdown(this.text, 0, 0, this.options.markdownTheme());
+		return new Markdown("", 0, 0, this.options.markdownTheme());
 	}
 
-	private bodyLines(width: number): string[] {
-		if (this.bodyCache?.width === width) return this.bodyCache.lines;
-		const lines = this.text.trim() === "" ? [this.options.theme.fg("muted", "(empty file)")] : this.markdown.render(width);
-		this.bodyCache = { width, lines };
+	/** The body of one doc, rendered `width` columns wide: the one seam between the frame and the markdown. */
+	private bodyLines(tab: Tab, width: number): string[] {
+		if (tab.body?.width === width) return tab.body.lines;
+		let lines: string[];
+		if (tab.text.trim() === "") lines = [this.options.theme.fg("muted", "(empty file)")];
+		else {
+			this.markdown.setText(tab.text);
+			lines = this.markdown.render(width);
+		}
+		tab.body = { width, lines };
 		return lines;
 	}
 
-	private frame(width: number, rows: number, focused: boolean, body: string[], bodyHeight: number): string[] {
+	private frame(width: number, rows: number, focused: boolean, body: string[], bodyHeight: number, scroll: number): string[] {
 		const { theme, keys } = this.options;
 		const rule = (text: string) => theme.fg(focused ? "borderAccent" : "border", text);
 		if (width < 4) return Array.from({ length: rows }, () => " ".repeat(width));
+		const tab = this.tabs[this.current];
+		const hint = (text: string) => theme.fg("dim", text);
 
-		// Top border: the file name first, so it is the last thing to go.
-		const top: string[] = [this.chip(this.name || "doc", "label")];
-		if (this.state.kind === "missing") top.push(this.chip("deleted · waiting", "warn"));
-		if (this.state.kind === "error") top.push(this.chip(this.state.message, "error"));
+		// Top border: the tab strip first, so the current doc's name is the last
+		// thing to go; then what is wrong with the current file, if anything.
+		const state = tab?.state ?? { kind: "ok" };
+		const stateChip =
+			state.kind === "missing"
+				? this.chip("deleted · waiting", "warn")
+				: state.kind === "error"
+					? this.chip(state.message, "error")
+					: undefined;
+		// borderLine spends 4 columns on rules around a lone piece, 3 more per extra one.
+		const room = width - 2 - 4;
+		const stripRoom = (reserve: number) =>
+			tabStrip(
+				this.tabs.map((t) => t.name),
+				this.current,
+				room - reserve,
+				(name) => this.chip(name, "label"),
+				hint,
+			);
+		// The state chip yields its room if keeping it would cut the current name.
+		const reserve = stateChip ? visibleWidth(stateChip) + 3 : 0;
+		const needed = tab ? visibleWidth(tab.name) + 2 + (this.tabs.length > 1 ? `${this.tabs.length}`.length * 2 + 3 : 0) : 0;
+		const strip = stripRoom(room - reserve >= needed ? reserve : 0);
+		const top = [strip || this.chip("doc", "label")];
+		if (stateChip) top.push(stateChip);
 
 		// Bottom border: position, then what the keys do in this focus state.
-		const first = body.length === 0 ? 0 : this.scroll + 1;
-		const last = Math.min(body.length, this.scroll + bodyHeight);
+		const first = body.length === 0 ? 0 : scroll + 1;
+		const last = Math.min(body.length, scroll + bodyHeight);
 		const bottom: string[] = [this.chip(`${first}–${last}/${body.length}`, "neutral")];
-		const hint = (text: string) => theme.fg("dim", text);
 		if (focused) {
 			// "esc back" first: on a narrow panel it is the hint that must survive.
 			bottom.push(hint("esc back"), hint("↑↓ j/k · PgUp/PgDn · g/G"));
+			if (this.tabs.length > 1) bottom.push(hint("tab/1–9 switch"));
+			bottom.push(hint("x close"), hint(`${keys.cycle} hide`));
 		} else {
-			bottom.push(hint(`${keys.focus} scroll`), hint(`${keys.toggle} hide`));
+			bottom.push(hint(`${keys.cycle} focus`));
 		}
 
 		const inner = width - 2 * (1 + PAD);
@@ -216,7 +319,7 @@ export class DocPanel implements Component {
 		const sideEnd = " ".repeat(PAD) + rule("│");
 		const lines = [borderLine(width, "╭", "╮", top, rule)];
 		for (let i = 0; i < bodyHeight; i++) {
-			const line = body[this.scroll + i] ?? "";
+			const line = body[scroll + i] ?? "";
 			lines.push(side + fit(line, inner) + sideEnd);
 		}
 		if (rows >= 2) lines.push(borderLine(width, "╰", "╯", bottom, rule));
@@ -238,6 +341,56 @@ export class DocPanel implements Component {
 			return ` ${text} `;
 		}
 	}
+}
+
+/**
+ * The tab strip, at most `room` columns: every name if they all fit, else the
+ * current tab and as many neighbours as fit, nearest first, followed by an
+ * `n/m` count. The current name is the last thing to go; it is truncated
+ * before it is dropped. One tab is just its name, as a panel with one doc
+ * always looked. Names arrive raw; `current` and `other` paint them, and every
+ * tab is padded with a space each side.
+ */
+export function tabStrip(
+	names: readonly string[],
+	current: number,
+	room: number,
+	paintCurrent: (name: string) => string,
+	paintOther: (text: string) => string,
+): string {
+	// Below 3 columns not even "…" fits between the padding.
+	if (names.length === 0 || room < 3) return "";
+	const cell = (i: number) => (i === current ? paintCurrent(names[i]!) : paintOther(` ${names[i]} `));
+	const widths = names.map((name) => visibleWidth(name) + 2);
+	const total = widths.reduce((sum, w) => sum + w, 0);
+	if (total <= room) return names.map((_, i) => cell(i)).join("");
+
+	const count = paintOther(` ${current + 1}/${names.length} `);
+	const countWidth = visibleWidth(count);
+	let left = room - countWidth;
+	// No room for the count beside even a cut name: the name alone.
+	if (left < Math.min(widths[current]!, 4)) {
+		return paintCurrent(truncateToWidth(names[current]!, Math.max(1, room - 2), "…"));
+	}
+	if (widths[current]! > left) return paintCurrent(truncateToWidth(names[current]!, left - 2, "…")) + count;
+
+	let from = current;
+	let to = current;
+	left -= widths[current]!;
+	for (let grew = true; grew; ) {
+		grew = false;
+		if (to + 1 < names.length && widths[to + 1]! <= left) {
+			left -= widths[++to]!;
+			grew = true;
+		}
+		if (from > 0 && widths[from - 1]! <= left) {
+			left -= widths[--from]!;
+			grew = true;
+		}
+	}
+	let strip = "";
+	for (let i = from; i <= to; i++) strip += cell(i);
+	return strip + count;
 }
 
 /** Exactly `width` columns: cut with an ellipsis if long, padded with spaces if short. */

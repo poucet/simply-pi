@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import type { OverlayHandle, OverlayOptions } from "@earendil-works/pi-tui";
-import { DocPanelController, KEYS, resolveDocPath } from "../index.ts";
+import { claimKey, DocPanelController, KEYS, resolveDocPath } from "../index.ts";
 import { resetForTests, snapshot } from "../../shared/border-badges.ts";
 import { watchFile } from "../watch.ts";
 
@@ -102,7 +102,7 @@ test("paths resolve against cwd and tolerate a leading @", () => {
 	assert.equal(resolveDocPath("/w", "/abs/a.md"), "/abs/a.md");
 });
 
-test("show opens one non-capturing right-hand overlay, and a second show swaps the doc", async () => {
+test("show opens one non-capturing right-hand overlay, and a second path opens a second tab in it", async () => {
 	const dir = scratch();
 	writeFileSync(join(dir, "a.md"), "# Alpha\n");
 	writeFileSync(join(dir, "b.md"), "# Beta\n");
@@ -117,10 +117,10 @@ test("show opens one non-capturing right-hand overlay, and a second show swaps t
 	assert.equal(state.component!.render(100).length, 20, "fills the terminal height");
 	assert.match(state.component!.render(100).join("\n"), /Alpha/);
 
-	await controller.show(ui, join(dir, "b.md"));
-	assert.equal(state.shown, 1, "swapped in place, not a second overlay");
+	assert.deepEqual(await controller.show(ui, join(dir, "b.md")), { tab: 2, of: 2 });
+	assert.equal(state.shown, 1, "a tab in the same overlay, not a second overlay");
 	assert.match(state.component!.render(100).join("\n"), /Beta/);
-	assert.match(state.component!.render(100)[0]!, /b\.md/);
+	assert.match(state.component!.render(100)[0]!, /a\.md.*b\.md/);
 
 	controller.close();
 	assert.equal(controller.isOpen(), false);
@@ -134,38 +134,136 @@ test("a missing file is refused and opens nothing", async () => {
 	assert.equal(state.shown, 0);
 });
 
-test("toggle hides with a badge, shows again, and reopens the last doc after close", async () => {
+test("the cycle key steps shown → focused → hidden → shown, with a badge while hidden, and reopens the last doc after close", async () => {
 	resetForTests();
 	const dir = scratch();
 	writeFileSync(join(dir, "a.md"), "# Alpha\n");
 	const { ui, state } = fakeUi();
 	const controller = new DocPanelController();
+	await controller.cycle(ui);
+	assert.match(state.notes.at(-1) ?? "", /No doc yet/, "nothing ever opened: says how");
+	assert.equal(state.shown, 0);
+
 	await controller.show(ui, join(dir, "a.md"));
 	await tick();
+	assert.deepEqual([state.hidden, state.focused], [false, false], "show never takes the keyboard");
 
-	controller.focus();
-	assert.equal(state.focused, true);
+	await controller.cycle(ui);
+	assert.deepEqual([state.hidden, state.focused], [false, true], "shown → focused");
 	state.component!.handleInput!("\x1b");
-	assert.equal(state.focused, false, "Esc gives focus back");
-	assert.equal(state.hidden, false, "Esc does not close or hide");
+	assert.deepEqual([state.hidden, state.focused], [false, false], "Esc gives focus back and leaves it shown");
 
-	await controller.toggle(ui);
-	assert.equal(state.hidden, true);
+	await controller.cycle(ui);
+	await controller.cycle(ui);
+	assert.deepEqual([state.hidden, state.focused], [true, false], "focused → hidden");
 	assert.deepEqual(
 		snapshot().find((g) => g.source === "doc-panel")?.badges.map((b) => b.text),
-		["doc", `a.md · ${KEYS.toggle}`],
+		["doc", `a.md · ${KEYS.cycle}`],
 	);
 	assert.match(state.status ?? "", /hidden/, "no badge renderer in tests, so the footer says it");
 
-	controller.focus();
-	assert.equal(state.hidden, false, "focusing a hidden panel shows it");
+	await controller.cycle(ui);
+	assert.deepEqual([state.hidden, state.focused], [false, false], "hidden → shown");
 	assert.equal(snapshot().find((g) => g.source === "doc-panel"), undefined);
 	assert.equal(state.status, undefined);
 
 	controller.close();
-	await controller.toggle(ui);
+	await controller.cycle(ui);
 	await tick();
-	assert.equal(state.shown, 2, "toggle with nothing open reopens the last doc");
+	assert.equal(state.shown, 2, "with nothing open it reopens the last doc");
+	controller.close();
+	rmSync(dir, { recursive: true, force: true });
+});
+
+test("the cycle key is claimed before pi sees it, wherever the focus is, and its release is swallowed", async () => {
+	const dir = scratch();
+	writeFileSync(join(dir, "a.md"), "# Alpha\n");
+	const { ui, state } = fakeUi();
+	let listener: ((data: string) => { consume?: boolean } | undefined) | undefined;
+	const claimUi = Object.assign(ui, {
+		onTerminalInput: (handler: typeof listener) => {
+			listener = handler;
+			return () => {
+				listener = undefined;
+			};
+		},
+	});
+	const controller = new DocPanelController();
+	const release = claimKey(claimUi, controller);
+	await controller.show(ui, join(dir, "a.md"));
+	await tick();
+
+	assert.equal(listener!("x"), undefined, "other keys pass through");
+	assert.deepEqual(listener!("\x1b[100;6u"), { consume: true }, "ctrl+shift+d, kitty protocol");
+	await tick();
+	assert.equal(state.focused, true);
+	assert.deepEqual(listener!("\x1b[100;6:3u"), { consume: true }, "its release");
+	await tick();
+	assert.equal(state.focused, true, "a release does not step the cycle");
+	listener!("\x1b[100;6u");
+	await tick();
+	assert.equal(state.hidden, true);
+	release();
+	assert.equal(listener, undefined);
+	controller.close();
+	rmSync(dir, { recursive: true, force: true });
+});
+
+test("tabs: a path already open switches to its tab, x closes one and its watch, the last tab closes the panel", async () => {
+	resetForTests();
+	const dir = scratch();
+	for (const n of ["a", "b", "c"]) writeFileSync(join(dir, `${n}.md`), `# ${n.toUpperCase()}\n`);
+	const { ui, state } = fakeUi();
+	const controller = new DocPanelController();
+	assert.deepEqual(await controller.show(ui, join(dir, "a.md")), { tab: 1, of: 1 });
+	await tick();
+	await controller.show(ui, join(dir, "b.md"));
+	assert.deepEqual(await controller.show(ui, join(dir, "c.md")), { tab: 3, of: 3 });
+
+	writeFileSync(join(dir, "a.md"), "# A again\n");
+	assert.deepEqual(await controller.show(ui, join(dir, "a.md")), { tab: 1, of: 3 }, "dedupe: back to its tab");
+	assert.match(state.component!.render(80).join("\n"), /A again/, "with the text read fresh");
+	assert.equal(controller.tabs().paths.length, 3);
+
+	// A watched tab updates while another is current.
+	writeFileSync(join(dir, "c.md"), "# C two\n");
+	await tick(300);
+	state.component!.handleInput!("3");
+	assert.match(state.component!.render(80).join("\n"), /C two/);
+
+	state.component!.handleInput!("x");
+	assert.deepEqual(controller.tabs().paths, [join(dir, "a.md"), join(dir, "b.md")]);
+	// A closed tab's watch is gone: writing its file changes nothing.
+	writeFileSync(join(dir, "c.md"), "# C three\n");
+	await tick(300);
+	await controller.show(ui, join(dir, "c.md"));
+	assert.match(state.component!.render(80).join("\n"), /C three/, "reopened, read fresh");
+	assert.equal(controller.tabs().current, 2);
+
+	controller.closeTab(0);
+	controller.closeTab(0);
+	assert.equal(controller.isOpen(), true);
+	assert.deepEqual(controller.tabs().paths, [join(dir, "c.md")]);
+	state.component!.handleInput!("x");
+	assert.equal(controller.isOpen(), false, "closing the last tab closes the panel");
+	assert.equal(state.component, undefined);
+	rmSync(dir, { recursive: true, force: true });
+});
+
+test("close closes every tab, and reopening brings back only the last doc", async () => {
+	const dir = scratch();
+	for (const n of ["a", "b"]) writeFileSync(join(dir, `${n}.md`), `# ${n}\n`);
+	const { ui } = fakeUi();
+	const controller = new DocPanelController();
+	await controller.show(ui, join(dir, "a.md"));
+	await tick();
+	await controller.show(ui, join(dir, "b.md"));
+	controller.close();
+	assert.equal(controller.isOpen(), false);
+	assert.deepEqual(controller.tabs().paths, []);
+	await controller.cycle(ui);
+	await tick();
+	assert.deepEqual(controller.tabs().paths, [join(dir, "b.md")]);
 	controller.close();
 	rmSync(dir, { recursive: true, force: true });
 });
@@ -220,11 +318,12 @@ test("the chat is narrowed by the panel's width while it shows, and gets it back
 	assert.equal(state.options?.width, 60, "the overlay follows a resize");
 	assert.deepEqual(tui.render(120), ["60"], "and so does the chat");
 
-	await controller.toggle(ui);
+	await controller.cycle(ui); // focused
+	await controller.cycle(ui); // hidden
 	assert.equal(state.hidden, true);
 	assert.deepEqual(tui.render(120), ["120"], "hidden: full width");
 
-	await controller.toggle(ui);
+	await controller.cycle(ui);
 	assert.deepEqual(tui.render(120), ["60"]);
 
 	controller.close();
