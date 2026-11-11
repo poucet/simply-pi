@@ -6,6 +6,11 @@ format is stated once in AGENTS.md §2. Lanes write `changelog.d/<LANE>.md`
 
 ## Unreleased
 
+#### The doc panel switches on `ctrl+]`, and follows your clicks in fullscreen · 2026-11-11 18:05 · onkszytq
+- The doc panel's key is now `ctrl+]` (hidden → shown → focused → hidden), replacing `ctrl+shift+d`, which is pi's debug dump again. `ctrl+]` was the editor's "jump forward to character" key; while this extension is loaded the panel takes it.
+- In fullscreen, clicking the panel gives it the keyboard, and clicking a tab's name in its top border also switches to that tab. Clicking anywhere in the chat while the panel has the keyboard hands it back to the input box, as Esc does; the panel stays shown. Dragging still selects text, and the wheel still scrolls the panel without taking the keyboard.
+- The regular (non-fullscreen) screen is unchanged: no mouse reporting, so the terminal's own selection keeps working.
+
 #### Badges stay in the input box's border when the input scrolls · 2026-11-11 08:06 · tqowyrrp
 
 When your input grew taller than the box, the badges in its top border disappeared. They now stay put beside pi's centred "↑ N more" indicator. If there is no room for them beside it, the badges are dropped and the indicator stays.
