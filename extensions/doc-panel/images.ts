@@ -194,7 +194,10 @@ export class ImageStore {
 		const cellDims = getCellDimensions();
 		const targetWidthPx = Math.min(widthBucket(maxColumns * cellDims.widthPx), 2000);
 		const loaded = readImage(path, mtimeMs, size, targetWidthPx, (svgPath, mt, sz, w) => this.loadSvg(svgPath, mt, sz, w));
-		this.files.set(path, "problem" in loaded ? { mtimeMs, size, problem: loaded.problem } : loaded);
+		// An SVG has its own cache (by width too) and its answer changes when the conversion lands.
+		if (extname(path).toLowerCase() !== ".svg") {
+			this.files.set(path, "problem" in loaded ? { mtimeMs, size, problem: loaded.problem } : loaded);
+		}
 		return loaded;
 	}
 

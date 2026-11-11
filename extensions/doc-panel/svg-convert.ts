@@ -7,8 +7,8 @@
  */
 
 import { execFile } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, unlinkSync } from "node:fs";
-import { basename, join } from "node:path";
+import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync } from "node:fs";
+import { basename, delimiter, join } from "node:path";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
 
@@ -41,7 +41,7 @@ export const defaultConverter: SvgConverter = async (svgPath, targetWidthPx) => 
 			case "magick":
 				await execFileAsync(
 					"magick",
-					["-background", "none", "-density", "300", "-resize", `${targetWidthPx}x`, svgPath, outPath],
+					["-background", "none", "-density", "300", svgPath, "-resize", `${targetWidthPx}x`, outPath],
 					{ timeout: 3000 },
 				);
 				break;
@@ -76,20 +76,13 @@ export const defaultConverter: SvgConverter = async (svgPath, targetWidthPx) => 
 	}
 };
 
-/** Detect which SVG conversion tool is on PATH. */
+/** The first SVG conversion tool found on PATH. */
 function detectConverter(): "rsvg" | "magick" | "qlmanage" | "none" {
-	for (const [tool, cmd] of [
-		["rsvg", "rsvg-convert"],
-		["magick", "magick"],
-		["qlmanage", "qlmanage"],
-	] as const) {
-		try {
-			execFileAsync(cmd, ["--version"], { timeout: 1000 }).catch(() => {});
-			return tool;
-		} catch {
-			// not found or timed out
-		}
-	}
+	const dirs = (process.env.PATH ?? "").split(delimiter).filter(Boolean);
+	const onPath = (cmd: string) => dirs.some((dir) => existsSync(join(dir, cmd)));
+	if (onPath("rsvg-convert")) return "rsvg";
+	if (onPath("magick")) return "magick";
+	if (onPath("qlmanage") || existsSync("/usr/bin/qlmanage")) return "qlmanage";
 	return "none";
 }
 

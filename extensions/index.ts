@@ -1,7 +1,6 @@
 /**
  * The repo's single entry point.
  *
- *
  * ## Why this file exists
  *
  * pi auto-discovers global extensions at `~/.pi/agent/extensions/*.ts` and

@@ -458,3 +458,39 @@ for (const kind of ["regular", "fullscreen"] as const) {
 		assert.ok(!/\x1b_Ga=[Tp]/.test(after), "nothing is placed again");
 	});
 }
+
+test("svg: placeholder while converting, then the converted PNG; failures say why", async () => {
+	caps("kitty");
+	const dir = fixtures();
+	writeFileSync(join(dir, "d.svg"), "<svg/>");
+	writeFileSync(join(dir, "bad.svg"), "<svg/>");
+	const png = pngHeader(100, 50).toString("base64");
+	let converted = 0;
+	const store = new ImageStore(
+		() => converted++,
+		async (path) => {
+			if (path.endsWith("bad.svg")) throw new Error("boom");
+			return png;
+		},
+	);
+	const say = () => render("![d](d.svg)\n\n![bad](bad.svg)", 60, { dir, images: store });
+	const first = say().lines.map(stripTerminalSequences).join("\n");
+	assert.match(first, /🖼 d · d\.svg \(rendering/);
+	await new Promise((r) => setTimeout(r, 10));
+	assert.equal(converted, 2);
+	const second = say();
+	assert.ok(second.images.length === 1, "the converted svg is placed");
+	assert.match(second.lines.map(stripTerminalSequences).join("\n"), /🖼 bad · bad\.svg \(svg: failed/);
+});
+
+test("svg: no converter on PATH says so", async () => {
+	caps("kitty");
+	const dir = fixtures();
+	writeFileSync(join(dir, "d.svg"), "<svg/>");
+	const store = new ImageStore(undefined, async () => {
+		throw new Error("no converter");
+	});
+	render("![d](d.svg)", 60, { dir, images: store });
+	await new Promise((r) => setTimeout(r, 10));
+	assert.match(render("![d](d.svg)", 60, { dir, images: store }).lines.map(stripTerminalSequences).join("\n"), /svg: no converter/);
+});

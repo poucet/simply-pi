@@ -1,7 +1,6 @@
 /**
  * Watch one file for changes, robustly enough for real editors.
  *
- *
  * Watching the file itself is not enough: an editor that saves atomically
  * writes a temporary file and renames it over the original, so the inode being
  * watched is gone and the watch goes silent after the first save. A file that
