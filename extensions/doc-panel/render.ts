@@ -1,6 +1,7 @@
 /**
  * Markdown to terminal lines for the doc panel, with the syntax gone.
  *
+ *
  * The chat's renderer (pi-tui's `Markdown`) keeps some of the source visible on
  * purpose, `### ` and code fences among it, which in a doc meant for reading
  * makes it look like the source. This renders a doc: headings told apart by
@@ -309,9 +310,12 @@ class DocRenderer {
 const PROBLEM_TEXT: Record<ImageProblem, string> = {
 	missing: "not found",
 	unreadable: "can't read it",
-	format: "not a PNG, JPEG, GIF or WebP",
+	format: "not a PNG, JPEG, GIF, WebP or SVG",
 	"too large": "too large to draw",
 	"no png": "can't convert it to PNG for this terminal",
+	rendering: "rendering…",
+	"svg: no converter": "svg: no converter",
+	"svg: failed": "svg: failed",
 };
 
 /** Level 1 underlined, 1–2 in the heading colour, 3 bold, 4 and below bold and muted. */

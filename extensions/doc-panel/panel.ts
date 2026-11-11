@@ -2,6 +2,7 @@
  * The side panel: markdown files, one tab each, the current one rendered in a
  * bordered box the height of the terminal.
  *
+ *
  * It is shown as a **non-capturing** overlay, so it never takes the keyboard by
  * itself; the extension hands it focus on a shortcut and it gives focus back on
  * Esc. Each tab keeps its own text, file state and scroll position; the panel
@@ -134,7 +135,7 @@ export class DocPanel implements Component {
 	open(key: string, name: string, text: string, state: DocState = { kind: "ok" }): number {
 		let index = this.indexOf(key);
 		if (index < 0) {
-			this.tabs.push({ key, name, text, state, scroll: 0, images: new ImageStore() });
+			this.tabs.push({ key, name, text, state, scroll: 0, images: new ImageStore(() => this.options.requestRender()) });
 			index = this.tabs.length - 1;
 		} else {
 			this.update(key, text, state);

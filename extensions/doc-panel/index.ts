@@ -2,7 +2,7 @@
  * Show markdown files in a side panel on the right of pi's terminal, one tab each.
  *
  * Agents write scratch docs meant for the human: instructions, a checklist, a
- * draft to review. Reading one in the chat means scrolling through tool output;
+ * draft to review. Images including SVG are drawn inline. Reading one in the chat means scrolling through tool output;
  * this puts it beside the chat, rendered, and keeps it current while the agent
  * edits it.
  *

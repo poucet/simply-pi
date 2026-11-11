@@ -9,13 +9,15 @@
  *
  * Files are read synchronously, because rendering is; they are read when the
  * doc is (re)rendered, never per frame, and kept until their mtime or size
- * changes.
+ * changes. SVGs are converted to PNG asynchronously via rsvg-convert, ImageMagick,
+ * or macOS Quick Look.
  */
 
 import { readFileSync, statSync } from "node:fs";
 import { extname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getCapabilities, getImageDimensions, Image, type ImageDimensions } from "@earendil-works/pi-tui";
+import { getCapabilities, getCellDimensions, getImageDimensions, Image, type ImageDimensions } from "@earendil-works/pi-tui";
+import { defaultConverter, type SvgConverter, widthBucket } from "./svg-convert.ts";
 
 /** Above this an image is not drawn: every redraw of its first row resends it. */
 export const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
@@ -26,6 +28,7 @@ const MIME_BY_EXT: Record<string, string> = {
 	".jpeg": "image/jpeg",
 	".gif": "image/gif",
 	".webp": "image/webp",
+	".svg": "image/svg+xml",
 };
 
 const KITTY = "\x1b_G";
@@ -78,7 +81,7 @@ interface Loaded {
 }
 
 /** Why an image is not drawn. */
-export type ImageProblem = "missing" | "unreadable" | "format" | "too large" | "no png";
+export type ImageProblem = "missing" | "unreadable" | "format" | "too large" | "no png" | "rendering" | "svg: no converter" | "svg: failed";
 
 export interface PlacedImage {
 	rows: number;
@@ -87,12 +90,30 @@ export interface PlacedImage {
 	sequence(hidden: number, visible: number): string;
 }
 
+/** Converted SVG: the PNG data and its dimensions. */
+interface ConvertedSvg {
+	mtimeMs: number;
+	size: number;
+	widthPx: number;
+	data: string;
+	dims: ImageDimensions;
+}
+
 /** Reads, caches and draws the images of one panel. */
 export class ImageStore {
 	private files = new Map<string, Loaded | { mtimeMs: number; size: number; problem: ImageProblem }>();
 	private images = new Map<string, Image>();
 	private ids = new Map<string, number>();
 	private used = new Set<string>();
+	/** Converted SVGs: key is `path\0mtimeMs\0size\0widthPx`. */
+	private svgCache = new Map<string, ConvertedSvg>();
+	/** SVG conversions in flight or failed: same key as svgCache, value is the problem. */
+	private svgPending = new Map<string, "rendering" | "svg: no converter" | "svg: failed">();
+
+	constructor(
+		private readonly onConverted?: () => void,
+		private readonly svgConverter: SvgConverter = defaultConverter,
+	) {}
 
 	/** Start a render pass: images not drawn by the pass are dropped at {@link endPass}. */
 	beginPass(): void {
@@ -118,7 +139,7 @@ export class ImageStore {
 	 * image ids or the second would replace the first.
 	 */
 	place(path: string, occurrence: number, maxColumns: number, maxRows: number): PlacedImage | ImageProblem {
-		const file = this.load(path);
+		const file = this.load(path, maxColumns);
 		if ("problem" in file) return file.problem;
 		const key = `${path}\0${occurrence}\0${file.mtimeMs}\0${file.size}\0${maxColumns}\0${maxRows}`;
 		this.used.add(key);
@@ -157,7 +178,7 @@ export class ImageStore {
 		};
 	}
 
-	private load(path: string): Loaded | { problem: ImageProblem } {
+	private load(path: string, maxColumns: number): Loaded | { problem: ImageProblem } {
 		let mtimeMs: number;
 		let size: number;
 		try {
@@ -170,15 +191,54 @@ export class ImageStore {
 		}
 		const cached = this.files.get(path);
 		if (cached && cached.mtimeMs === mtimeMs && cached.size === size) return cached;
-		const loaded = readImage(path, mtimeMs, size);
+		const cellDims = getCellDimensions();
+		const targetWidthPx = Math.min(widthBucket(maxColumns * cellDims.widthPx), 2000);
+		const loaded = readImage(path, mtimeMs, size, targetWidthPx, (svgPath, mt, sz, w) => this.loadSvg(svgPath, mt, sz, w));
 		this.files.set(path, "problem" in loaded ? { mtimeMs, size, problem: loaded.problem } : loaded);
 		return loaded;
 	}
+
+	private loadSvg(path: string, mtimeMs: number, size: number, widthPx: number): Loaded | { problem: ImageProblem } {
+		const cacheKey = `${path}\0${mtimeMs}\0${size}\0${widthPx}`;
+		const cached = this.svgCache.get(cacheKey);
+		if (cached) {
+			return { mtimeMs: cached.mtimeMs, size: cached.size, data: cached.data, mime: "image/png", dims: cached.dims };
+		}
+		const pending = this.svgPending.get(cacheKey);
+		if (pending) return { problem: pending };
+		this.svgPending.set(cacheKey, "rendering");
+		this.svgConverter(path, widthPx)
+			.then((data) => {
+				const dims = getImageDimensions(data, "image/png");
+				if (!dims) {
+					this.svgPending.set(cacheKey, "svg: failed");
+					this.onConverted?.();
+					return;
+				}
+				this.svgCache.set(cacheKey, { mtimeMs, size, widthPx, data, dims });
+				this.svgPending.delete(cacheKey);
+				this.onConverted?.();
+			})
+			.catch((error) => {
+				const message = error instanceof Error && error.message === "no converter" ? "svg: no converter" : "svg: failed";
+				this.svgPending.set(cacheKey, message);
+				this.onConverted?.();
+			});
+		return { problem: "rendering" };
+	}
 }
 
-function readImage(path: string, mtimeMs: number, size: number): Loaded | { problem: ImageProblem } {
-	const mime = MIME_BY_EXT[extname(path).toLowerCase()];
+function readImage(
+	path: string,
+	mtimeMs: number,
+	size: number,
+	targetWidthPx: number,
+	loadSvg: (path: string, mtimeMs: number, size: number, widthPx: number) => Loaded | { problem: ImageProblem },
+): Loaded | { problem: ImageProblem } {
+	const ext = extname(path).toLowerCase();
+	const mime = MIME_BY_EXT[ext];
 	if (!mime) return { problem: "format" };
+	if (ext === ".svg") return loadSvg(path, mtimeMs, size, targetWidthPx);
 	if (size > MAX_IMAGE_BYTES) return { problem: "too large" };
 	let data: string;
 	try {

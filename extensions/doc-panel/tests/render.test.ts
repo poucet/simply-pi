@@ -190,7 +190,7 @@ test("on Kitty, a missing, non-image or unconvertible file says why it isn't dra
 	const dir = fixtures();
 	const say = (md: string) => render(md, 80, { dir }).lines.map(stripTerminalSequences).join("\n");
 	assert.match(say("![gone](nope.png)"), /🖼 gone · nope\.png \(not found\)/);
-	assert.match(say("![txt](notes.txt)"), /\(not a PNG, JPEG, GIF or WebP\)/);
+	assert.match(say("![txt](notes.txt)"), /\(not a PNG, JPEG, GIF, WebP or SVG\)/);
 	// No PNG transcoder is registered in tests, and Kitty takes only PNG.
 	assert.match(say("![photo](photo.jpg)"), /\(can't convert it to PNG for this terminal\)/);
 });
