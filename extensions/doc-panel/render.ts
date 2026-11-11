@@ -105,8 +105,9 @@ class DocRenderer {
 
 	constructor(private readonly env: DocEnv) {}
 
-	blocks(tokens: readonly MdToken[], width: number, style: Style, depth: number): RenderedDoc {
+	blocks(all: readonly MdToken[], width: number, style: Style, depth: number): RenderedDoc {
 		const out: RenderedDoc = { lines: [], images: [] };
+		const tokens = withoutComments(all);
 		tokens.forEach((token, i) => append(out, this.block(token, width, tokens[i + 1]?.type, style, depth)));
 		return out;
 	}
@@ -125,19 +126,13 @@ class DocRenderer {
 				gap();
 				break;
 			}
-			case "paragraph": {
-				const inner: MdToken[] = token.tokens ?? [];
-				if (isImageParagraph(inner)) {
-					for (const image of inner) if (image.type === "image") append(out, this.image(image, width));
-				} else {
-					out.lines.push(...wrapTextWithAnsi(this.inline(inner, style), width));
-				}
+			case "paragraph":
+				append(out, this.paragraph(token.tokens ?? [], width, style));
 				if (next !== "list") gap();
 				break;
-			}
 			case "text":
 				// A tight list item's text.
-				out.lines.push(...wrapTextWithAnsi(this.inline(token.tokens ?? [token], style), width));
+				append(out, this.paragraph(token.tokens ?? [token], width, style));
 				break;
 			case "code": {
 				const bar = md.codeBlockBorder("▎") + " ";
@@ -189,6 +184,14 @@ class DocRenderer {
 			default:
 				if (typeof token.text === "string") out.lines.push(...wrapTextWithAnsi(style.apply(token.text), width));
 		}
+		return out;
+	}
+
+	/** Running text, or images when that is all there is. */
+	private paragraph(tokens: readonly MdToken[], width: number, style: Style): RenderedDoc {
+		if (!isImageParagraph(tokens)) return { lines: wrapTextWithAnsi(this.inline(tokens, style), width), images: [] };
+		const out: RenderedDoc = { lines: [], images: [] };
+		for (const token of tokens) if (token.type === "image") append(out, this.image(token, width));
 		return out;
 	}
 
@@ -337,6 +340,20 @@ function isImageParagraph(tokens: readonly MdToken[]): boolean {
 		else return false;
 	}
 	return images > 0;
+}
+
+/**
+ * Drop html blocks that are only comments, and the blank line one leaves
+ * behind, so a comment takes no room.
+ */
+function withoutComments(tokens: readonly MdToken[]): MdToken[] {
+	const kept: MdToken[] = [];
+	for (const token of tokens) {
+		if (token.type === "html" && String(token.raw ?? "").replace(HTML_COMMENT, "").trim() === "") continue;
+		if (token.type === "space" && kept.at(-1)?.type === "space") continue;
+		kept.push(token);
+	}
+	return kept;
 }
 
 /** Add `src` below `dst`, moving its images down with it. */
