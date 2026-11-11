@@ -251,11 +251,9 @@ class DocRenderer {
 
 	private inline(tokens: readonly MdToken[], style: Style): string {
 		const { md, theme } = this.env;
-		const text = (raw: string) =>
-			raw
-				.split("\n")
-				.map((line) => style.apply(line))
-				.join("\n");
+		// A newline inside a paragraph is a soft break: markdown joins it with a
+		// space and the renderer rewraps to the panel. Only `br` breaks a line.
+		const text = (raw: string) => style.apply(raw.replace(/[ \t]*\n[ \t]*/g, " "));
 		let result = "";
 		for (const token of tokens) {
 			switch (token.type) {

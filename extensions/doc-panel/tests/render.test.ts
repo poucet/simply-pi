@@ -80,6 +80,11 @@ function plain(text: string, width = 60): string[] {
 	return render(text, width).lines.map(stripTerminalSequences);
 }
 
+test("a paragraph's own line breaks are joined and the text rewrapped; a hard break still breaks", () => {
+	assert.deepEqual(plain("one two\nthree four\nfive", 60), ["one two three four five"]);
+	assert.deepEqual(plain("one two  \nthree", 60), ["one two", "three"]);
+});
+
 test("headings show their text with no # at any level", () => {
 	const lines = plain("# One\n\n## Two\n\n### Three\n\n#### Four\n\n###### Six");
 	for (const word of ["One", "Two", "Three", "Four", "Six"]) assert.ok(lines.includes(word), `${word} in ${JSON.stringify(lines)}`);
@@ -319,7 +324,7 @@ function newPanel(rows: () => number) {
 	});
 }
 
-const IMAGE_DOC = ["# Title", "", "line a", "", "![tall](shot.png)", "", ...Array.from({ length: 20 }, (_, i) => `after ${i + 1}`)].join("\n");
+const IMAGE_DOC = ["# Title", "", "line a", "", "![tall](shot.png)", "", ...Array.from({ length: 20 }, (_, i) => `after ${i + 1}  `)].join("\n");
 
 /** A panel over a doc with a tall image in the middle; the tab's key is its path, so images resolve beside it. */
 function imagePanel(rows: number) {
