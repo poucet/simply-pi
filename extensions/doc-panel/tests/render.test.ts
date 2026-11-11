@@ -15,6 +15,8 @@ import {
 	type MarkdownTheme,
 	resetCapabilitiesCache,
 	setCapabilities,
+	setCellDimensions,
+	setImageTranscoder,
 	stripTerminalSequences,
 	TuiAltScreen,
 	TuiMainScreen,
@@ -213,6 +215,45 @@ test("an image in a list item sits after the bullet", () => {
 	const mark = out.images[0]!;
 	assert.equal(out.lines[mark.row], "• ");
 	assert.equal(out.lines[mark.row + 1], "  ");
+});
+
+test("a JPEG on Kitty goes through pi's PNG transcoder, also when it registers after the first render", () => {
+	caps("kitty");
+	const dir = fixtures();
+	const images = new ImageStore();
+	const doc = "![photo](photo.jpg)";
+	assert.deepEqual(render(doc, 40, { dir, images }).images, [], "no transcoder yet: placeholder");
+	let calls = 0;
+	setImageTranscoder((_data, mime) => {
+		calls++;
+		assert.equal(mime, "image/jpeg");
+		return pngHeader(64, 32).toString("base64");
+	});
+	try {
+		const out = render(doc, 40, { dir, images });
+		assert.equal(out.images.length, 1, "drawn once the transcoder is there");
+		assert.equal(calls, 1);
+		assert.ok(out.images[0]!.sequence(0, out.images[0]!.rows).includes("f=100"), "sent as PNG");
+	} finally {
+		setImageTranscoder(undefined);
+	}
+});
+
+test("invalidate redraws images at the terminal's real cell size", () => {
+	caps("kitty");
+	const dir = fixtures({ width: 900, height: 900 });
+	const images = new ImageStore();
+	const rows = () => render("![sq](shot.png)", 40, { dir, images, maxImageRows: 100 }).images[0]!.rows;
+	setCellDimensions({ widthPx: 9, heightPx: 18 });
+	try {
+		const before = rows();
+		setCellDimensions({ widthPx: 9, heightPx: 9 });
+		assert.equal(rows(), before, "cached until invalidated");
+		images.invalidate();
+		assert.ok(rows() > before, "square cells: more rows for the same picture");
+	} finally {
+		setCellDimensions({ widthPx: 9, heightPx: 18 });
+	}
 });
 
 test("cropKitty cuts the source rectangle and the rows; whole images are left alone", () => {

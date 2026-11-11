@@ -104,6 +104,15 @@ export class ImageStore {
 	}
 
 	/**
+	 * Draw every image again on its next use: the cell size is learnt from the
+	 * terminal after startup, and pi follows that (and its PNG transcoder
+	 * arriving) with an invalidate.
+	 */
+	invalidate(): void {
+		for (const image of this.images.values()) image.invalidate();
+	}
+
+	/**
 	 * Draw the file at `path` within `maxColumns` × `maxRows` cells. `occurrence`
 	 * tells apart two uses of one file in a doc, which need their own Kitty
 	 * image ids or the second would replace the first.
@@ -133,7 +142,11 @@ export class ImageStore {
 		const first = lines[0] ?? "";
 		// Image draws a text fallback when it can't make a PNG for Kitty.
 		const start = first.indexOf(KITTY);
-		if (start < 0) return "no png";
+		if (start < 0) {
+			// pi registers its transcoder asynchronously at startup; not kept, so the next render tries again.
+			this.images.delete(key);
+			return "no png";
+		}
 		const controls = first.slice(start + KITTY.length, first.indexOf(";", start));
 		const columns = Number(/(?:^|,)c=(\d+)/.exec(controls)?.[1] ?? maxColumns);
 		const rows = lines.length;
