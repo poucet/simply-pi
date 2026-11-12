@@ -3,7 +3,14 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { describePersonas, discoverPersonas, findPersona, parseContextMode, parseToolList } from "../personas.ts";
+import {
+	describePersonas,
+	discoverPersonas,
+	findPersona,
+	manifestPersonaDirs,
+	parseContextMode,
+	parseToolList,
+} from "../personas.ts";
 
 // --- parseToolList --------------------------------------------------------
 
@@ -129,6 +136,39 @@ test("discoverPersonas returns nothing when the user directory is absent", () =>
 	process.env.PI_CODING_AGENT_DIR = join(root, "missing");
 	try {
 		assert.deepEqual(discoverPersonas(root, true), []);
+	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("discoverPersonas reads personas installed packages declare under pi.personas", () => {
+	const root = mkdtempSync(join(tmpdir(), "subagent-personas-"));
+	const agentDir = join(root, "agent");
+	const pkg = join(root, "pkg");
+	const project = join(root, "project");
+	mkdirSync(join(agentDir, "agents"), { recursive: true });
+	mkdirSync(join(pkg, "roles"), { recursive: true });
+	mkdirSync(project, { recursive: true });
+	writeFileSync(
+		join(pkg, "package.json"),
+		JSON.stringify({ name: "roles", pi: { personas: ["./roles", "./missing"] } }),
+	);
+	writeFileSync(join(pkg, "roles", "coder.md"), "---\nname: coder\ndescription: from package\n---\nCode.\n");
+	writeFileSync(join(pkg, "roles", "scribe.md"), "---\nname: scribe\n---\nWrite.\n");
+	// The user's own persona wins over a package's.
+	writeFileSync(join(agentDir, "agents", "scribe.md"), "---\nname: scribe\ndescription: mine\n---\nMine.\n");
+	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: [pkg] }));
+
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	try {
+		assert.deepEqual(manifestPersonaDirs(pkg), [join(pkg, "roles")]);
+		const personas = discoverPersonas(project, false);
+		assert.equal(findPersona(personas, "coder")?.source, "package");
+		assert.equal(findPersona(personas, "coder")?.description, "from package");
+		assert.equal(findPersona(personas, "scribe")?.source, "user");
 	} finally {
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previous;

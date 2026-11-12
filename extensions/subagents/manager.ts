@@ -60,6 +60,7 @@ import {
 	parentMessages,
 	resolveMode,
 	seedChildSession,
+	SUBAGENTS_DIR_ENV,
 	subagentsRoot,
 	summarizeForChild,
 } from "./context.ts";
@@ -1298,6 +1299,9 @@ export class SubagentManager {
 				...(target.parentSessionId ? { [PARENT_SESSION_ENV]: target.parentSessionId } : {}),
 				[NOTES_ENV]: target.launch.notesPath,
 				[ANSWERS_ENV]: answersDirectory(target.sessionDir),
+				// The tree lives in the parent's project; a child working elsewhere
+				// (a lane's workspace) records its own children there too.
+				[SUBAGENTS_DIR_ENV]: subagentsRoot(),
 				// Which MCP servers this child may boot, read by child-mcp.ts (the
 				// extension args above already follow it). Always set, even when empty:
 				// the child reads "unset" as an empty allowlist anyway,

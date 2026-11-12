@@ -14,12 +14,13 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { complete } from "@earendil-works/pi-ai/compat";
 import {
+	CONFIG_DIR_NAME,
 	CURRENT_SESSION_VERSION,
 	SessionManager,
 	buildSessionContext,
@@ -221,9 +222,65 @@ export async function summarizeForChild(
 	return summary;
 }
 
-export function subagentsRoot(): string {
-	const agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
-	return join(agentDir, "subagents");
+/**
+ * Overrides where the agent tree is stored. A parent sets it on every child it
+ * launches, so a child working in another directory (a lane's workspace, say)
+ * still records its own children beside its parent's.
+ */
+export const SUBAGENTS_DIR_ENV = "PI_SUBAGENTS_DIR";
+
+/**
+ * Where the agent tree lives: the registry, shared notes, child sessions.
+ *
+ * In the project, `<project>/.pi/subagents`, so a repo's agents move with the
+ * repo; `<project>` is the nearest directory at or above the working directory
+ * holding `.jj` or `.git`. In order:
+ *
+ *   1. `PI_SUBAGENTS_DIR`, set by a parent for its children;
+ *   2. `PI_CODING_AGENT_DIR/subagents` when that is set — an explicit agent
+ *      directory keeps everything under it (the tests rely on this);
+ *   3. `<project>/.pi/subagents`;
+ *   4. `~/.pi/agent/subagents`, outside any repository.
+ */
+export function subagentsRoot(cwd = process.cwd()): string {
+	const override = process.env[SUBAGENTS_DIR_ENV];
+	if (override) return override;
+	const agentDir = process.env.PI_CODING_AGENT_DIR;
+	if (agentDir) return join(agentDir, "subagents");
+	const project = projectRoot(cwd);
+	if (project) {
+		ensureSelfIgnoringDir(join(project, CONFIG_DIR_NAME));
+		return join(project, CONFIG_DIR_NAME, "subagents");
+	}
+	return join(homedir(), ".pi", "agent", "subagents");
+}
+
+/** The nearest directory at or above `cwd` that holds `.jj` or `.git`. */
+export function projectRoot(cwd: string): string | undefined {
+	let current = resolve(cwd);
+	for (;;) {
+		if (existsSync(join(current, ".jj")) || existsSync(join(current, ".git"))) return current;
+		const parent = dirname(current);
+		if (parent === current) return undefined;
+		current = parent;
+	}
+}
+
+/**
+ * `.pi/` in a project is local state (sessions, the agent tree, reports), never
+ * tracked: it carries its own `.gitignore` of `*`. Created here when absent so
+ * the first write into it cannot dirty the repository.
+ */
+function ensureSelfIgnoringDir(dir: string): void {
+	try {
+		const ignore = join(dir, ".gitignore");
+		if (existsSync(ignore)) return;
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(ignore, "*\n", { flag: "wx" });
+	} catch {
+		// Best effort: an unwritable project falls through to whatever the caller
+		// does next, which reports its own error.
+	}
 }
 
 /** Stable per-parent, per-child directory so children survive a parent restart. */

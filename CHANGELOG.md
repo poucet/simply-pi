@@ -6,6 +6,10 @@ format is stated once in AGENTS.md §2. Lanes write `changelog.d/<LANE>.md`
 
 ## Unreleased
 
+#### Packages can ship personas, and a repo keeps its own agent tree · 2026-11-12 06:40 · yukwyuvr
+- A pi package can now ship subagent personas: list their directories under `pi.personas` in its `package.json`. Your own `~/.pi/agent/agents` wins over a package's persona of the same name, and a trusted project's `.pi/agents` over both.
+- The agent tree (registry, shared notes, children's transcripts) now lives in the repo, under `<repo>/.pi/subagents`, instead of `~/.pi/agent/subagents`, so it moves with the repo. `.pi/` gets a `.gitignore` of `*` if it has none. Outside a repository nothing changes.
+
 #### The doc panel switches on `ctrl+]`, and follows your clicks in fullscreen · 2026-11-11 18:05 · onkszytq
 - The doc panel's key is now `ctrl+]` (hidden → shown → focused → hidden), replacing `ctrl+shift+d`, which is pi's debug dump again. `ctrl+]` was the editor's "jump forward to character" key; while this extension is loaded the panel takes it.
 - In fullscreen, clicking the panel gives it the keyboard, and clicking a tab's name in its top border also switches to that tab. Clicking anywhere in the chat while the panel has the keyboard hands it back to the input box, as Esc does; the panel stays shown. Dragging still selects text, and the wheel still scrolls the panel without taking the keyboard.

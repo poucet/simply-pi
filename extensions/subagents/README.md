@@ -108,7 +108,8 @@ All children and the parent share one scratchpad. Children get `shared_notes`
 `subagent { action: "notes" }`. This is how sibling agents agree on an interface
 without routing every word through the parent.
 
-Location: `~/.pi/agent/subagents/sessions/<parent-session-id>/SHARED_NOTES.md`
+Location: `<store>/sessions/<parent-session-id>/SHARED_NOTES.md` (see *Where the
+agent tree lives*, below)
 
 ## Child → parent messages
 
@@ -274,8 +275,15 @@ entries, and answering one leaves the others untouched.
 
 ## Personas
 
-Optional markdown files in `~/.pi/agent/agents/*.md` (and `.pi/agents/*.md` for
-trusted projects when `projectPersonas` is on):
+Optional markdown files, from three places; a later one wins a name collision:
+
+1. **installed pi packages**: each directory a package lists under `pi.personas`
+   in its `package.json` (`"pi": { "personas": ["./agents"] }`), relative to the
+   package root. pi packages have no persona resource of their own, so this key is
+   how a package ships roles. Project-scoped packages count only in trusted
+   projects;
+2. `~/.pi/agent/agents/*.md`;
+3. `.pi/agents/*.md`, for trusted projects when `projectPersonas` is on.
 
 ```markdown
 ---
@@ -905,7 +913,7 @@ the parent notices the process exit, marks the agent failed with the child's
 stderr attached, and mails that to you instead of waiting forever.
 
 Closing an agent deletes its session directory under
-`~/.pi/agent/subagents/sessions/<parent-session-id>/`, except for a failed one:
+`<store>/sessions/<parent-session-id>/`, except for a failed one:
 its transcript is the only post-mortem evidence there is, so it is kept.
 
 ### Reload survives (hibernation)
@@ -996,8 +1004,18 @@ and unreachable, with their transcripts sitting on disk.
 So there is a second record, outside any session:
 
 ```
-~/.pi/agent/subagents/registry.json
+<store>/registry.json
 ```
+
+### Where the agent tree lives
+
+`<store>` is `<project>/.pi/subagents`, so a repo's agents move with the repo;
+`<project>` is the nearest directory at or above pi's working directory holding
+`.jj` or `.git`, and its `.pi/` gets a `.gitignore` of `*` if it has none. A
+parent passes its store to every child in `PI_SUBAGENTS_DIR`, so a child working
+in another directory records its own children beside its parent's. With
+`PI_CODING_AGENT_DIR` set the store is `$PI_CODING_AGENT_DIR/subagents`; outside
+any repository it is `~/.pi/agent/subagents`.
 
 ```jsonc
 {

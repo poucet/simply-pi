@@ -25,7 +25,13 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { CONFIG_DIR_NAME, getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import {
+	CONFIG_DIR_NAME,
+	DefaultPackageManager,
+	getAgentDir,
+	parseFrontmatter,
+	SettingsManager,
+} from "@earendil-works/pi-coding-agent";
 import { expandMentions } from "./mentions.ts";
 import type { ContextMode } from "./types.ts";
 
@@ -36,9 +42,12 @@ export interface Persona {
 	model?: string;
 	context?: ContextMode;
 	systemPrompt: string;
-	source: "user" | "project";
+	source: PersonaSource;
 	filePath: string;
 }
+
+/** Where a persona came from; later sources win a name collision. */
+export type PersonaSource = "package" | "user" | "project";
 
 type PersonaFrontmatter = {
 	name?: unknown;
@@ -81,7 +90,7 @@ export function parseToolList(value: unknown): string[] | undefined {
 	return tools.length > 0 ? tools : undefined;
 }
 
-function loadDir(dir: string, source: "user" | "project"): Persona[] {
+function loadDir(dir: string, source: PersonaSource): Persona[] {
 	if (!fs.existsSync(dir)) return [];
 	let entries: fs.Dirent[];
 	try {
@@ -146,20 +155,74 @@ function nearestProjectPersonaDir(cwd: string): string | null {
 }
 
 /**
+ * The persona directories installed pi packages declare.
+ *
+ * pi packages carry extensions, skills, prompts and themes, but no personas, so
+ * a package names its persona directories under its own manifest key:
+ *
+ *     { "pi": { "personas": ["./agents"] } }
+ *
+ * Paths are directories relative to the package root. Packages come from the
+ * same settings pi reads (`packages` in `~/.pi/agent/settings.json`, and in the
+ * project's `.pi/settings.json` when the project is trusted), resolved to where
+ * they are installed; one that isn't installed contributes nothing. Never
+ * throws: a broken manifest costs its own personas, not discovery.
+ */
+export function packagePersonaDirs(cwd: string, includeProject: boolean): string[] {
+	let packages: { scope: string; installedPath?: string }[];
+	try {
+		const agentDir = getAgentDir();
+		const settingsManager = SettingsManager.create(cwd, agentDir);
+		const manager = new DefaultPackageManager({ cwd, agentDir, settingsManager });
+		packages = manager.listConfiguredPackages();
+	} catch {
+		return [];
+	}
+	const dirs: string[] = [];
+	for (const pkg of packages) {
+		if (!pkg.installedPath) continue;
+		if (pkg.scope === "project" && !includeProject) continue;
+		dirs.push(...manifestPersonaDirs(pkg.installedPath));
+	}
+	return dirs;
+}
+
+/** `pi.personas` of the package at `root`, as absolute directories that exist. */
+export function manifestPersonaDirs(root: string): string[] {
+	let manifest: any;
+	try {
+		manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf-8"));
+	} catch {
+		return [];
+	}
+	const declared = manifest?.pi?.personas;
+	const entries = Array.isArray(declared) ? declared : typeof declared === "string" ? [declared] : [];
+	return entries
+		.filter((entry): entry is string => typeof entry === "string")
+		.map((entry) => path.resolve(root, entry))
+		.filter(isDirectory);
+}
+
+/**
  * Personas are re-read on every call so they can be edited mid-session.
  *
- * Project personas are only loaded for trusted projects: a persona is an
- * instruction file that runs with your credentials, so an untrusted repo must
- * not be able to introduce one.
+ * Three layers, later wins a name collision: installed packages' personas
+ * (`pi.personas`), the user's `~/.pi/agent/agents`, and the nearest project
+ * `.pi/agents`. Project personas — and personas from project-scoped packages —
+ * are only loaded for trusted projects: a persona is an instruction file that
+ * runs with your credentials, so an untrusted repo must not be able to
+ * introduce one.
  */
 export function discoverPersonas(cwd: string, includeProject: boolean): Persona[] {
+	const fromPackages = packagePersonaDirs(cwd, includeProject).flatMap((dir) => loadDir(dir, "package"));
 	const user = loadDir(path.join(getAgentDir(), "agents"), "user");
 	const projectDir = includeProject ? nearestProjectPersonaDir(cwd) : null;
 	const project = projectDir ? loadDir(projectDir, "project") : [];
 
 	const byName = new Map<string, Persona>();
-	for (const persona of user) byName.set(persona.name.toLowerCase(), persona);
-	for (const persona of project) byName.set(persona.name.toLowerCase(), persona); // project wins
+	for (const persona of [...fromPackages, ...user, ...project]) {
+		byName.set(persona.name.toLowerCase(), persona);
+	}
 	return [...byName.values()];
 }
 

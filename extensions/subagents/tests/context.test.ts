@@ -284,3 +284,33 @@ test("seedChildSession writes a fork with no signed thinking in it", async () =>
 		rmSync(root, { recursive: true, force: true });
 	}
 });
+
+test("subagentsRoot keeps the agent tree in the project's self-ignoring .pi/", async () => {
+	const { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync } = await import("node:fs");
+	const { tmpdir } = await import("node:os");
+	const { join } = await import("node:path");
+	const { projectRoot, subagentsRoot, SUBAGENTS_DIR_ENV } = await import("../context.ts");
+	const root = realpathSync(mkdtempSync(join(tmpdir(), "subagent-root-")));
+	const project = join(root, "repo");
+	mkdirSync(join(project, ".jj"), { recursive: true });
+	mkdirSync(join(project, "src", "deep"), { recursive: true });
+	const saved = { agent: process.env.PI_CODING_AGENT_DIR, dir: process.env[SUBAGENTS_DIR_ENV] };
+	delete process.env.PI_CODING_AGENT_DIR;
+	delete process.env[SUBAGENTS_DIR_ENV];
+	try {
+		assert.equal(projectRoot(join(project, "src", "deep")), project);
+		assert.equal(subagentsRoot(join(project, "src", "deep")), join(project, ".pi", "subagents"));
+		assert.equal(readFileSync(join(project, ".pi", ".gitignore"), "utf-8"), "*\n");
+		process.env[SUBAGENTS_DIR_ENV] = join(root, "pinned");
+		assert.equal(subagentsRoot(join(project, "src")), join(root, "pinned"));
+		delete process.env[SUBAGENTS_DIR_ENV];
+		process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+		assert.equal(subagentsRoot(project), join(root, "agent", "subagents"));
+	} finally {
+		if (saved.agent === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = saved.agent;
+		if (saved.dir === undefined) delete process.env[SUBAGENTS_DIR_ENV];
+		else process.env[SUBAGENTS_DIR_ENV] = saved.dir;
+		rmSync(root, { recursive: true, force: true });
+	}
+});

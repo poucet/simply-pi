@@ -36,6 +36,9 @@ delete process.env.PI_SUBAGENT_NAME;
 delete process.env.PI_SUBAGENT_PARENT;
 delete process.env.PI_SUBAGENT_NOTES;
 delete process.env.PI_SUBAGENT_ANSWERS;
+// A parent pins its children's agent tree here; the suite's must follow
+// PI_CODING_AGENT_DIR above instead.
+delete process.env.PI_SUBAGENTS_DIR;
 
 /** Locate the installed pi package, whose node_modules we borrow. */
 function piPackageRoot() {
