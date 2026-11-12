@@ -1,0 +1,18 @@
+{
+  "name": "simply-pi",
+  "version": "0.1.0",
+  "description": "pi extensions: subagents, MCP, the doc panel, the shell guard.",
+  "private": true,
+  "type": "module",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./extensions/index.ts"],
+    "changelogPath": ""
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  }
+}

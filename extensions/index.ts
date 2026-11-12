@@ -3,19 +3,9 @@
  *
  * ## Why this file exists
  *
- * pi auto-discovers global extensions at `~/.pi/agent/extensions/*.ts` and
- * `~/.pi/agent/extensions/<dir>/index.ts` — a subdirectory contributes **exactly one**
- * entry point, its `index.ts`, and nothing else inside it is loaded.
- *
- * This repo is mounted as one such subdirectory:
- *
- *     ~/.pi/agent/extensions/simply-pi -> <this repo>/extensions
- *
- * so pi loads this file and only this file. Everything the repo ships has to be
- * installed from here. That is the trade for the single-symlink setup: one link
- * wires up the whole repo, and personal machine-specific extensions can live
- * beside it as loose `.ts` files in the real `~/.pi/agent/extensions` directory
- * without being tracked here.
+ * The repo is a pi package (`pi install <this repo>`), and its manifest names
+ * this file as its one extension, so everything the repo ships is installed
+ * from here.
  *
  * **When you add a new top-level extension to this repo, add it to the list
  * below.** Otherwise it is simply never loaded, silently.

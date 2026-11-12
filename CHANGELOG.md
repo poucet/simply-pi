@@ -6,6 +6,9 @@ format is stated once in AGENTS.md §2. Lanes write `changelog.d/<LANE>.md`
 
 ## Unreleased
 
+#### Installs as a pi package · 2026-11-12 07:35 · oouzspwy
+- simply-pi is now a pi package: `pi install <path to this repo>` loads it, in place of the `~/.pi/agent/extensions/simply-pi` symlink. Nothing else changes for you; remove the old symlink when you install, or both would load.
+
 #### Packages can ship personas, and a repo keeps its own agent tree · 2026-11-12 06:40 · yukwyuvr
 - A pi package can now ship subagent personas: list their directories under `pi.personas` in its `package.json`. Your own `~/.pi/agent/agents` wins over a package's persona of the same name, and a trusted project's `.pi/agents` over both.
 - The agent tree (registry, shared notes, children's transcripts) now lives in the repo, under `<repo>/.pi/subagents`, instead of `~/.pi/agent/subagents`, so it moves with the repo. `.pi/` gets a `.gitignore` of `*` if it has none. Outside a repository nothing changes.
