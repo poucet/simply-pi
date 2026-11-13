@@ -9,7 +9,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ChatPaneRegistry } from "../chat-pane.ts";
-import { SubagentChatView, TextOverlay, captureWheel, switcherLines } from "../chat-view.ts";
+import { SubagentChatView, TextOverlay, besideSidePane, captureWheel, switcherLines } from "../chat-view.ts";
+import { DocPanel } from "../../doc-panel/panel.ts";
+import * as sidePane from "../../shared/side-pane.ts";
 import { TuiAltScreen } from "@earendil-works/pi-tui";
 import { osc52, parseMouseReport } from "../../shared/mouse-selection.ts";
 import { SwitcherStrip, nestedEntryId } from "../switcher.ts";
@@ -573,4 +575,60 @@ test("styled lines copy without escapes and keep their style after the highlight
 	// Reverse opens at the range and is re-asserted after the green inside it.
 	assert.ok(painted.startsWith(`\x1b[31mred\x1b[0m ${REVERSE}plain \x1b[32m${REVERSE}green`), painted);
 	assert.equal(plain(painted), "red plain green   ");
+});
+
+test("beside the doc panel a press over the panel selects nothing, and a drag onto it stops at the chat's edge", () => {
+	const { view, pane, writes } = scrollHarness(24, 100);
+	pane.scrollTop = 0;
+	pane.followEnd = false;
+	// The overlay is 50 columns wide; the panel takes the rest of the 80.
+	view.render(50);
+	view.handleInput(press(60, 3));
+	view.handleInput(release(62, 3));
+	assert.deepEqual(clipboard(writes), [], "a press right of the chat is the panel's");
+	view.handleInput(press(1, 2));
+	view.handleInput(release(75, 2));
+	assert.deepEqual(clipboard(writes), ["line 0"]);
+});
+
+test("in fullscreen a drag that starts on the doc panel beside the subagent chat copies only the panel's text", () => {
+	const h = altScreenHarness();
+	sidePane.resetForTests();
+	try {
+		// The doc panel on the right 30 columns, published as the controller does.
+		const panelCopies: string[] = [];
+		const panel = new DocPanel({
+			theme: flatTheme,
+			markdownTheme: () => new Proxy({}, { get: () => (t: string) => t }) as any,
+			rows: () => 24,
+			isFocused: () => false,
+			unfocus: () => {},
+			hide: () => {},
+			closeTab: () => {},
+			requestRender: () => {},
+			keys: { cycle: "ctrl+]" },
+			copy: (text) => panelCopies.push(text),
+		});
+		panel.open("/d/A.md", "A.md", Array.from({ length: 30 }, (_, i) => `doc ${i}`).join("\n\n"));
+		sidePane.publish("doc-panel", () => 30);
+		const layout = besideSidePane();
+		layout.attach(h.tui);
+		const chatCopies: string[] = [];
+		const view = new SubagentChatView(h.tui, flatTheme, { agents: () => [], unread: () => 0, statusIcon: () => "", subscribe: () => () => {}, send: async () => {} } as any, new ChatPaneRegistry(h.tui, () => () => {}, () => {}), () => {}, undefined, (t) => chatCopies.push(t));
+		h.tui.showOverlay(view, layout.options);
+		h.tui.showOverlay(panel, { anchor: "right-center", width: 30, maxHeight: "100%", nonCapturing: true });
+		h.tui.doRender();
+
+		// A drag on the panel, ending over the chat: the panel's text only.
+		h.send(press(55, 2));
+		h.send(drag(10, 4));
+		h.send(release(10, 4));
+		assert.equal(h.tui.hasActiveSelection(), false, "pi's own selection never started");
+		// Panel column 54 is text column 2 of "doc 0"; the chat-side end clamps to column 0 of line 2.
+		assert.deepEqual(panelCopies, ["c 0\n\n"]);
+		assert.deepEqual(chatCopies, []);
+	} finally {
+		sidePane.resetForTests();
+		h.stop();
+	}
 });

@@ -297,8 +297,9 @@ export class DocPanel implements Component {
 				return { handled: true, capture: true };
 			case "drag":
 			case "release":
-				this.extendSelection(event, event.type === "release");
-				return { handled: true };
+				// Only the panel's own drag: one that began in the chat and crossed
+				// over the panel is pi's, and pi clamps it to the chat.
+				return this.extendSelection(event, event.type === "release") ? { handled: true } : undefined;
 			case "click":
 				if (event.y === 0) {
 					const span = this.tabSpans.find((s) => event.x >= s.start && event.x < s.end);
@@ -319,11 +320,14 @@ export class DocPanel implements Component {
 		this.changed();
 	}
 
-	/** A drag moves the selection's loose end; the release also copies it, or drops it if empty. */
-	private extendSelection(event: { x: number; y: number }, release: boolean): void {
+	/**
+	 * A drag moves the selection's loose end; the release also copies it, or
+	 * drops it if empty. False when no selection of the panel's is being dragged.
+	 */
+	private extendSelection(event: { x: number; y: number }, release: boolean): boolean {
 		const tab = this.tabs[this.current];
 		const selection = tab?.selection;
-		if (!tab || !selection?.dragging) return;
+		if (!tab || !selection?.dragging) return false;
 		selection.focus = this.contentPoint(tab, event, !release) ?? selection.focus;
 		if (release) {
 			selection.dragging = false;
@@ -332,6 +336,7 @@ export class DocPanel implements Component {
 			else tab.selection = undefined;
 		}
 		this.changed();
+		return true;
 	}
 
 	/** The current selection's plain text, or `undefined` if nothing is selected. */

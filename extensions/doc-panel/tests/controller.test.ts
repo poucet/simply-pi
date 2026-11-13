@@ -13,6 +13,7 @@ import { initTheme } from "@earendil-works/pi-coding-agent";
 import type { OverlayHandle, OverlayOptions } from "@earendil-works/pi-tui";
 import { claimKey, DocPanelController, KEYS, resolveDocPath } from "../index.ts";
 import { resetForTests, snapshot } from "../../shared/border-badges.ts";
+import * as sidePane from "../../shared/side-pane.ts";
 import { watchFile } from "../watch.ts";
 
 // The panel asks pi for its markdown theme, which needs a loaded theme.
@@ -332,5 +333,34 @@ test("the chat is narrowed by the panel's width while it shows, and gets it back
 
 	controller.close();
 	assert.deepEqual(tui.render(120), ["120"], "closed: full width");
+	rmSync(dir, { recursive: true, force: true });
+});
+
+test("the panel's columns are published for other overlays while it shows, and withdrawn when hidden or closed", async () => {
+	sidePane.resetForTests();
+	const dir = scratch();
+	writeFileSync(join(dir, "a.md"), "# Alpha\n");
+	const { ui, state } = fakeUi();
+	let heard = 0;
+	sidePane.subscribe(() => heard++);
+	const controller = new DocPanelController();
+	await controller.show(ui, join(dir, "a.md"));
+	await tick();
+	assert.equal(sidePane.reservedRight(200), 100, "the same columns the chat gives up");
+	const opened = heard;
+	assert.ok(opened >= 1, "subscribers heard the panel open");
+
+	await controller.cycle(ui); // focused
+	await controller.cycle(ui); // hidden
+	assert.equal(sidePane.reservedRight(200), 0, "hidden: nothing reserved");
+	assert.ok(heard > opened, "and subscribers heard it");
+
+	await controller.cycle(ui);
+	assert.equal(sidePane.reservedRight(200), 100);
+	assert.equal((state.options as any)?.visible?.(200, 20), true, "the overlay is visible unless the split masks it");
+
+	controller.close();
+	assert.equal(sidePane.reservedRight(200), 0, "closed: withdrawn");
+	sidePane.resetForTests();
 	rmSync(dir, { recursive: true, force: true });
 });
