@@ -11,7 +11,7 @@ import { test } from "node:test";
 import { ChatPaneRegistry } from "../chat-pane.ts";
 import { SubagentChatView, TextOverlay, captureWheel, switcherLines } from "../chat-view.ts";
 import { TuiAltScreen } from "@earendil-works/pi-tui";
-import { parseMouseReport } from "../mouse-selection.ts";
+import { osc52, parseMouseReport } from "../../shared/mouse-selection.ts";
 import { SwitcherStrip, nestedEntryId } from "../switcher.ts";
 import type { ChatHost, ManagedAgent } from "../types.ts";
 
@@ -223,7 +223,8 @@ function scrollHarness(rows: number, contentLines = 0) {
 		send: async () => {},
 	};
 	const registry = new ChatPaneRegistry(tui, host.subscribe, () => {});
-	const view = new SubagentChatView(tui, flatTheme, host, registry, () => {}, "id-a");
+	// The copy is recorded as the OSC 52 write it would be, never sent to the real clipboard.
+	const view = new SubagentChatView(tui, flatTheme, host, registry, () => {}, "id-a", (text) => writes.push(osc52(text)));
 	const pane = registry.get(agents[0]!);
 	// Enough content that the pane can genuinely scroll.
 	for (let i = 0; i < contentLines; i++) pane.content.addChild({ render: () => [`line ${i}`] });

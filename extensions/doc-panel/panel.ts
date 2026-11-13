@@ -27,6 +27,14 @@
  * has its own image store, so two tabs never share a Kitty image id; a tab that
  * is not current puts no placement in the frame, and pi-tui deletes the
  * placements of lines that change, so switching tabs leaves no image behind.
+ *
+ * In fullscreen the panel selects its own text: a left-button drag that starts
+ * on the panel is claimed, so pi's own selection, which would run across the
+ * chat as well, never starts. The range is kept per tab in content
+ * coordinates (a rendered line and a column in it), so it stays on its text
+ * while the panel scrolls; it is painted in reverse video and its plain text
+ * copied on release. A drag past the top or bottom of the body scrolls one
+ * line per move.
  */
 
 import { dirname } from "node:path";
@@ -43,6 +51,14 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import { RECOMMENDED_TOKENS, type BadgeTone } from "../shared/border-badges.ts";
+import {
+	highlightColumns,
+	orderRange,
+	rangeColumns,
+	selectedText,
+	type TextPoint,
+	type TextRange,
+} from "../shared/mouse-selection.ts";
 import { ImageStore } from "./images.ts";
 import { type RenderedDoc, renderDoc } from "./render.ts";
 
@@ -75,6 +91,8 @@ interface Tab extends DocTab {
 	body?: { width: number; imageRows: number; doc: RenderedDoc };
 	/** This doc's images, with Kitty ids of their own. */
 	images: ImageStore;
+	/** A mouse selection in `body`'s lines; dropped with the body it was made in. */
+	selection?: { anchor: TextPoint; focus: TextPoint; dragging: boolean };
 }
 
 export interface DocPanelOptions {
@@ -92,6 +110,8 @@ export interface DocPanelOptions {
 	closeTab: (index: number) => void;
 	requestRender: () => void;
 	keys: PanelKeys;
+	/** Put a finished selection's text on the clipboard. Without it a selection is only painted. */
+	copy?: (text: string) => void;
 }
 
 /** Lines of padding between the border and the text, each side. */
@@ -107,6 +127,8 @@ export class DocPanel implements Component {
 	private current = 0;
 	/** Body height of the last render, for page-sized scrolling between renders. */
 	private bodyHeight = 1;
+	/** Width of the last render, to map a pointer column to a body column. */
+	private lastWidth = 0;
 	private frameCache?: { key: string; lines: string[] };
 	/** Where the last frame drew each tab in the top border, in panel columns. */
 	private tabSpans: TabSpan[] = [];
@@ -210,12 +232,15 @@ export class DocPanel implements Component {
 		const imageRows = Math.max(1, Math.floor(bodyHeight * IMAGE_HEIGHT_SHARE));
 		const body = tab && width > 2 * (1 + PAD) ? this.body(tab, width - 2 * (1 + PAD), imageRows) : NO_BODY;
 		this.bodyHeight = Math.max(1, bodyHeight);
+		this.lastWidth = width;
 		const scroll = tab ? (tab.scroll = clamp(tab.scroll, 0, Math.max(0, body.lines.length - bodyHeight))) : 0;
 
 		const key = `${width}|${rows}|${focused}|${scroll}`;
 		if (this.frameCache?.key === key) return this.frameCache.lines;
 
-		const lines = this.frame(width, rows, focused, body, bodyHeight, scroll);
+		const selection = tab?.selection;
+		const range = selection && orderRange(selection.anchor, selection.focus);
+		const lines = this.frame(width, rows, focused, body, bodyHeight, scroll, range);
 		this.frameCache = { key, lines };
 		return lines;
 	}
@@ -251,11 +276,13 @@ export class DocPanel implements Component {
 	}
 
 	/**
-	 * The mouse, in fullscreen mode (the only mode that reports it). The wheel
-	 * scrolls without taking focus. A left click focuses the panel, and on a
-	 * tab's name in the top border also switches to that tab. It answers the
-	 * click, not the press, so a drag still selects the panel's text: pi
-	 * synthesizes the click when a press is released where it started.
+	 * The mouse, in fullscreen mode (the only mode that reports it), in panel
+	 * cells. The wheel scrolls without taking focus. A left press anywhere on the
+	 * panel is claimed, so pi starts no selection of its own; over the body it
+	 * starts the panel's (see the module header), the drag extends it, and the
+	 * release copies it. A left click focuses the panel, and on a tab's name in
+	 * the top border also switches to that tab: pi synthesizes the click when a
+	 * press is released where it started, so a drag never focuses.
 	 */
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
 		if (event.type === "wheel") {
@@ -263,12 +290,76 @@ export class DocPanel implements Component {
 			this.scrollBy(event.wheelDelta);
 			return { handled: true };
 		}
-		if (event.type !== "click" || event.button !== "left") return undefined;
-		if (event.y === 0) {
-			const span = this.tabSpans.find((s) => event.x >= s.start && event.x < s.end);
-			if (span) this.select(span.index);
+		if (event.button !== "left") return undefined;
+		switch (event.type) {
+			case "press":
+				this.startSelection(event);
+				return { handled: true, capture: true };
+			case "drag":
+			case "release":
+				this.extendSelection(event, event.type === "release");
+				return { handled: true };
+			case "click":
+				if (event.y === 0) {
+					const span = this.tabSpans.find((s) => event.x >= s.start && event.x < s.end);
+					if (span) this.select(span.index);
+				}
+				return { handled: true, focus: true };
+			default:
+				return undefined;
 		}
-		return { handled: true, focus: true };
+	}
+
+	/** A press: a new selection on the current tab if it is over the body, none otherwise. */
+	private startSelection(event: { x: number; y: number }): void {
+		const tab = this.tabs[this.current];
+		if (!tab) return;
+		const point = this.contentPoint(tab, event, false);
+		tab.selection = point && { anchor: point, focus: point, dragging: true };
+		this.changed();
+	}
+
+	/** A drag moves the selection's loose end; the release also copies it, or drops it if empty. */
+	private extendSelection(event: { x: number; y: number }, release: boolean): void {
+		const tab = this.tabs[this.current];
+		const selection = tab?.selection;
+		if (!tab || !selection?.dragging) return;
+		selection.focus = this.contentPoint(tab, event, !release) ?? selection.focus;
+		if (release) {
+			selection.dragging = false;
+			const text = this.selectionText();
+			if (text !== undefined) this.options.copy?.(text);
+			else tab.selection = undefined;
+		}
+		this.changed();
+	}
+
+	/** The current selection's plain text, or `undefined` if nothing is selected. */
+	selectionText(): string | undefined {
+		const tab = this.tabs[this.current];
+		const selection = tab?.selection;
+		const range = selection && orderRange(selection.anchor, selection.focus);
+		return range ? selectedText(tab.body?.doc.lines ?? [], range) : undefined;
+	}
+
+	/**
+	 * The body position under a pointer at panel cell (`x`, `y`), through the
+	 * last frame's scroll. Off the body: `undefined`, or with `drag` the nearest
+	 * body line, after scrolling a line toward the pointer when it is above or
+	 * below the body.
+	 */
+	private contentPoint(tab: Tab, event: { x: number; y: number }, drag: boolean): TextPoint | undefined {
+		const lines = tab.body?.doc.lines;
+		if (!lines) return undefined;
+		const row = event.y - 1;
+		const offBody = row < 0 || row >= this.bodyHeight;
+		if (offBody && !drag) return undefined;
+		if (drag && row < 0) this.scrollBy(-1);
+		else if (drag && row >= this.bodyHeight) this.scrollBy(1);
+		const visible = Math.min(this.bodyHeight, lines.length - tab.scroll);
+		if (visible <= 0) return undefined;
+		const inner = Math.max(0, this.lastWidth - 2 * (1 + PAD));
+		return { line: tab.scroll + clamp(row, 0, visible - 1), col: clamp(event.x - (1 + PAD), 0, inner) };
 	}
 
 	scrollBy(lines: number): void {
@@ -300,6 +391,8 @@ export class DocPanel implements Component {
 	private body(tab: Tab, width: number, imageRows: number): RenderedDoc {
 		const cached = tab.body;
 		if (cached?.width === width && cached.imageRows === imageRows) return cached.doc;
+		// A selection names lines of the body it was made in; new lines, new text under it.
+		tab.selection = undefined;
 		const { theme } = this.options;
 		const doc =
 			tab.text.trim() === ""
@@ -315,7 +408,15 @@ export class DocPanel implements Component {
 		return doc;
 	}
 
-	private frame(width: number, rows: number, focused: boolean, body: RenderedDoc, bodyHeight: number, scroll: number): string[] {
+	private frame(
+		width: number,
+		rows: number,
+		focused: boolean,
+		body: RenderedDoc,
+		bodyHeight: number,
+		scroll: number,
+		range?: TextRange,
+	): string[] {
 		const { theme, keys } = this.options;
 		const rule = (text: string) => theme.fg(focused ? "borderAccent" : "border", text);
 		if (width < 4) return Array.from({ length: rows }, () => " ".repeat(width));
@@ -369,7 +470,7 @@ export class DocPanel implements Component {
 		const sideEnd = " ".repeat(PAD) + rule("│");
 		const lines = [borderLine(width, "╭", "╮", top, rule)];
 		const end = scroll + bodyHeight;
-		for (let row = scroll; row < end; row++) lines.push(side + fit(bodyRow(body, row, scroll, end), inner) + sideEnd);
+		for (let row = scroll; row < end; row++) lines.push(side + fit(bodyRow(body, row, scroll, end, range), inner) + sideEnd);
 		if (rows >= 2) lines.push(borderLine(width, "╰", "╯", bottom, rule));
 		return lines.slice(0, rows);
 	}
@@ -472,11 +573,14 @@ export function layoutTabStrip(
 }
 
 /**
- * Body line `row` of a frame showing rows `scroll`..`end - 1`. An image's
- * placement goes on its first row on screen, cut to the rows on screen.
+ * Body line `row` of a frame showing rows `scroll`..`end - 1`, with the part of
+ * it `range` covers in reverse video. An image's placement goes on its first
+ * row on screen, cut to the rows on screen.
  */
-function bodyRow(body: RenderedDoc, row: number, scroll: number, end: number): string {
-	const line = body.lines[row] ?? "";
+function bodyRow(body: RenderedDoc, row: number, scroll: number, end: number, range?: TextRange): string {
+	let line = body.lines[row] ?? "";
+	const columns = range && rangeColumns(range, row);
+	if (columns) line = highlightColumns(line, columns[0], columns[1]);
 	const image = body.images.find((m) => row === Math.max(m.row, scroll) && row < m.row + m.rows);
 	return image ? line + image.sequence(row - image.row, Math.min(image.row + image.rows, end) - row) : line;
 }

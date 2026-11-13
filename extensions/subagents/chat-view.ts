@@ -44,10 +44,14 @@
  * through `handleMouse`, the same handler regular mode feeds.
  *
  * Owning the mouse costs the terminal's own click-drag selection, so the chat
- * view selects for itself (mouse-selection.ts): drag reporting (`?1002h`) is on
+ * view selects for itself (shared/mouse-selection.ts): drag reporting (`?1002h`) is on
  * with the wheel in regular mode, a left-button drag over the body is painted
- * in reverse video, and its plain text goes to the clipboard by OSC 52 on
- * release.
+ * in reverse video, and its plain text goes to the clipboard on release, the
+ * way pi copies its own fullscreen selection.
+ *
+ * The overlay runs from the left edge to the doc panel when one is shown
+ * (shared/side-pane.ts), so the two sit side by side and a selection here
+ * stays in the chat's columns.
  */
 
 import type { ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
@@ -68,13 +72,14 @@ import { AgentChatPane, ChatPaneRegistry } from "./chat-pane.ts";
 import {
 	type MouseReport,
 	type TextPoint,
+	copyToSystemClipboard,
 	highlightColumns,
 	orderRange,
-	osc52,
 	parseMouseReport,
 	rangeColumns,
 	selectedText,
-} from "./mouse-selection.ts";
+} from "../shared/mouse-selection.ts";
+import { reservedRight, subscribe as onSidePaneChange } from "../shared/side-pane.ts";
 import {
 	MAIN_ENTRY_ID,
 	SwitcherStrip,
@@ -244,9 +249,10 @@ export class SubagentChatView implements Component, Focusable {
 	private _focused = false;
 	private lastBodyHeight = 10;
 	private status?: string;
-	/** Screen row of the first body line, and the content it showed, as of the last frame. */
+	/** Screen row of the first body line, the content it showed, and the frame's width, as of the last frame. */
 	private lastBodyTop = 0;
 	private lastContent: string[] = [];
+	private lastWidth = 0;
 	/** A mouse selection in content coordinates, on the entry it was made in. */
 	private selection?: { entryId: string; anchor: TextPoint; focus: TextPoint; dragging: boolean };
 
@@ -257,6 +263,8 @@ export class SubagentChatView implements Component, Focusable {
 		private registry: ChatPaneRegistry,
 		private done: () => void,
 		startEntryId?: string,
+		/** Where a finished selection goes; pi's clipboard path unless a test says otherwise. */
+		private copyText: (text: string) => void = (text) => void copyToSystemClipboard(tui, text),
 	) {
 		const entries = treeEntries(this.host);
 		this.currentId = entries.find((entry) => entry.id === startEntryId)?.id ?? entries[0]?.id ?? MAIN_ENTRY_ID;
@@ -477,23 +485,24 @@ export class SubagentChatView implements Component, Focusable {
 
 	/**
 	 * The content position under a pointer, through the scroll offset of the
-	 * last frame. Outside the body: `undefined`, or with `clamp` (a drag that
-	 * left it) the nearest body row.
+	 * last frame. Outside the body (above, below, or right of the frame, where
+	 * the doc panel may be): `undefined`, or with `clamp` (a drag that left it)
+	 * the nearest body cell.
 	 */
 	private contentPoint(event: MouseReport, clamp: boolean): TextPoint | undefined {
 		const pane = this.pane();
 		const visible = Math.min(this.lastBodyHeight, this.lastContent.length - (pane?.scrollTop ?? 0));
 		if (!pane || visible <= 0) return undefined;
 		let row = event.y - this.lastBodyTop;
-		if (!clamp && (row < 0 || row >= this.lastBodyHeight)) return undefined;
+		if (!clamp && (row < 0 || row >= this.lastBodyHeight || event.x >= this.lastWidth)) return undefined;
 		row = Math.max(0, Math.min(visible - 1, row));
-		return { line: pane.scrollTop + row, col: Math.max(0, event.x) };
+		return { line: pane.scrollTop + row, col: Math.max(0, Math.min(this.lastWidth, event.x)) };
 	}
 
 	private copy(text: string): void {
 		if (!text) return;
 		try {
-			(this.tui.terminal as { write?: (data: string) => void }).write?.(osc52(text));
+			this.copyText(text);
 		} catch {
 			/* a torn-down terminal cannot take the copy */
 		}
@@ -528,6 +537,7 @@ export class SubagentChatView implements Component, Focusable {
 		this.lastBodyHeight = bodyHeight;
 		this.lastBodyTop = header.length;
 		this.lastContent = [];
+		this.lastWidth = width;
 
 		const body: string[] = [];
 		const pane = this.pane();
@@ -811,6 +821,33 @@ export function keepFocus(tui: TUI, component: Component): () => void {
 /** How often an open read-only transcript re-reads its session file. */
 const TRANSCRIPT_POLL_MS = 1000;
 
+/**
+ * Overlay options for a full-height pane from the left edge to the side pane
+ * (the doc panel) if one is shown, else the whole width; exported for tests.
+ * The width is a getter, read on every frame, so a resize or the panel showing
+ * or hiding re-lays the pane out; `attach` makes such a change draw a frame.
+ */
+export function besideSidePane(): {
+	options: { anchor: "top-left"; maxHeight: "100%"; readonly width: number };
+	attach: (tui: TUI) => () => void;
+} {
+	let columns = (): number => 80;
+	return {
+		options: {
+			anchor: "top-left",
+			maxHeight: "100%",
+			get width() {
+				const cols = columns();
+				return Math.max(1, cols - reservedRight(cols));
+			},
+		},
+		attach: (tui) => {
+			columns = () => tui.terminal.columns;
+			return onSidePaneChange(() => tui.requestRender());
+		},
+	};
+}
+
 /** Open the full-screen subagent chat, starting on `startEntryId` (an agent id or a nested entry id) if given. */
 export async function openSubagentChat(
 	ui: ExtensionUIContext,
@@ -820,6 +857,8 @@ export async function openSubagentChat(
 	let releaseFocus: (() => void) | undefined;
 	let releaseWheel: (() => void) | undefined;
 	let follow: ReturnType<typeof setInterval> | undefined;
+	const layout = besideSidePane();
+	let detach: (() => void) | undefined;
 	try {
 		await ui.custom<void>(
 			(tui, theme, _keybindings, done) => {
@@ -838,14 +877,13 @@ export async function openSubagentChat(
 				// focus that makes pi's scroller defer to us.
 				releaseFocus = keepFocus(tui, view);
 				releaseWheel = captureWheel(tui);
+				detach = layout.attach(tui);
 				return view;
 			},
-			{
-				overlay: true,
-				overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" },
-			},
+			{ overlay: true, overlayOptions: layout.options },
 		);
 	} finally {
+		detach?.();
 		if (follow) clearInterval(follow);
 		releaseWheel?.();
 		releaseFocus?.();
@@ -926,20 +964,21 @@ export async function openTextOverlay(
 	// guard — see `keepFocus`.
 	let releaseFocus: (() => void) | undefined;
 	let releaseWheel: (() => void) | undefined;
+	const layout = besideSidePane();
+	let detach: (() => void) | undefined;
 	try {
 		await ui.custom<void>(
 			(tui, theme, _keybindings, done) => {
 				const overlay = new TextOverlay(tui, theme, title, text, () => done(undefined));
 				releaseFocus = keepFocus(tui, overlay);
 				releaseWheel = captureWheel(tui);
+				detach = layout.attach(tui);
 				return overlay;
 			},
-			{
-				overlay: true,
-				overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" },
-			},
+			{ overlay: true, overlayOptions: layout.options },
 		);
 	} finally {
+		detach?.();
 		releaseWheel?.();
 		releaseFocus?.();
 	}

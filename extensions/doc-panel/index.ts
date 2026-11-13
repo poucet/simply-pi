@@ -26,7 +26,14 @@
  * covered; hiding or closing it gives the chat its full width back. Where the
  * chat can't be narrowed the panel falls back to covering its right half. It is
  * shown **non-capturing**, so opening it, even from a tool call mid-turn, never
- * takes the keyboard from the editor.
+ * takes the keyboard from the editor. The columns it keeps are published to
+ * `shared/side-pane.ts` too, so a full-width overlay from another extension
+ * (the subagent chat) sits beside it rather than over or under it.
+ *
+ * In fullscreen a mouse drag selects within the pane it starts in: on the
+ * panel, the current tab's text (panel.ts); in the chat, the chat's columns
+ * (split.ts). A finished selection is copied the way pi copies its own.
+ * The regular screen leaves selection to the terminal.
  *
  * Live reload watches each open file's directory (see `watch.ts`), so editors
  * that save by rename, and a file deleted and recreated, keep updating; a
@@ -39,6 +46,8 @@ import { type ExtensionAPI, type ExtensionContext, getMarkdownTheme } from "@ear
 import { isKeyRelease, matchesKey, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { hasRenderer, publish, subscribe } from "../shared/border-badges.ts";
+import { copyToSystemClipboard } from "../shared/mouse-selection.ts";
+import * as sidePane from "../shared/side-pane.ts";
 import { DocPanel, type DocState, type PanelKeys } from "./panel.ts";
 import { type ChatSplit, installSplit, panelWidth } from "./split.ts";
 import { type FileWatch, watchFile } from "./watch.ts";
@@ -58,6 +67,9 @@ const MAX_BYTES = 2 * 1024 * 1024;
 /** Where the badge bar files this extension's chips. */
 const BADGE_SOURCE = "doc-panel";
 
+/** Who the panel's reserved columns belong to, in `shared/side-pane.ts`. */
+const SIDE_PANE_SOURCE = "doc-panel";
+
 /** The slice of pi's UI the controller uses; `ctx.ui` in a session, a fake in tests. */
 type Ui = Pick<ExtensionContext["ui"], "custom" | "notify" | "setStatus">;
 
@@ -68,6 +80,8 @@ interface OpenPanel {
 	/** One per open tab, by path. */
 	watches: Map<string, FileWatch>;
 	split?: ChatSplit;
+	/** True only while pi's `hasOverlay()` runs: the panel then says it is not visible (see split.ts). */
+	masked?: boolean;
 	close: () => void;
 }
 
@@ -123,6 +137,7 @@ export class DocPanelController {
 						closeTab: (index) => this.closeTab(index),
 						requestRender: () => tui.requestRender(),
 						keys: KEYS,
+						copy: (text) => void copyToSystemClipboard(tui, text),
 					});
 					panel.open(path, basename(path), text);
 					created = { panel, tui, watches: new Map(), close: () => done() };
@@ -130,17 +145,22 @@ export class DocPanelController {
 					this.open = created;
 					const open = created;
 					// Reserve the panel's columns only while this panel is the open one and showing.
-					open.split = installSplit(
-						tui,
-						(width) => (this.open === open && open.handle && !open.handle.isHidden() ? panelWidth(width) : 0),
+					const reserve = (width: number) =>
+						this.open === open && open.handle && !open.handle.isHidden() ? panelWidth(width) : 0;
+					open.split = installSplit(tui, reserve, {
 						// A click in the chat hands the keyboard back, as Esc does.
-						{ onChatPress: () => open.handle?.isFocused() && open.handle.unfocus() },
-					);
+						onChatPress: () => open.handle?.isFocused() && open.handle.unfocus(),
+						maskPane: (masked) => {
+							open.masked = masked;
+						},
+					});
+					sidePane.publish(SIDE_PANE_SOURCE, reserve);
 					return Object.assign(panel, {
 						// Runs however the panel goes away: `/doc close`, a session
 						// shutdown, or pi tearing its overlays down.
 						dispose: () => {
 							created?.split?.remove();
+							if (this.open === created) sidePane.publish(SIDE_PANE_SOURCE, undefined);
 							for (const watch of created?.watches.values() ?? []) watch.close();
 							created?.watches.clear();
 							if (this.open === created) this.open = undefined;
@@ -161,10 +181,13 @@ export class DocPanelController {
 						// stops a stray extra line from ever pushing it off-screen.
 						maxHeight: "100%",
 						nonCapturing: true,
+						visible: () => created?.masked !== true,
 					},
 					onHandle: (handle) => {
 						if (!created) return;
 						created.handle = handle;
+						// The reserve reads the handle: it starts counting now.
+						sidePane.notify();
 						// The split reads the handle; draw once more now that it can.
 						created.tui.requestRender();
 					},
@@ -236,6 +259,7 @@ export class DocPanelController {
 		// Hiding a focused overlay hands focus back by itself (pi-tui's setHidden).
 		open.handle.setHidden(hidden);
 		open.tui.requestRender();
+		sidePane.notify();
 		this.publishBadge();
 	}
 

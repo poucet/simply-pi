@@ -1,17 +1,19 @@
 /**
- * Mouse reports and text selection for the full-screen overlays.
+ * Mouse reports and text selection for panes that select for themselves.
  *
- * An overlay that owns the mouse (so the wheel scrolls it, see chat-view.ts)
- * takes the terminal's own click-drag selection away with it. This is the
- * replacement: the overlay tracks a left-button drag itself, paints the range
- * and copies its plain text. Everything here is pure, so the overlay keeps only
- * the wiring.
+ * A pane that owns the mouse (the subagent chat, so the wheel scrolls it) or
+ * that sits beside pi's chat (the doc panel, where pi's own selection would
+ * run across both) cannot use the terminal's or pi's selection: it tracks a
+ * left-button drag itself, paints the range and copies its plain text. The
+ * helpers are pure, bar {@link copyToSystemClipboard}, so a pane keeps only the
+ * wiring.
  *
  * Positions are in *content* coordinates — a line of the rendered transcript
  * and a visible column in it — never screen rows, so a selection stays on the
  * same text while the pane scrolls or streams underneath it.
  */
 
+import { copyToClipboard } from "@earendil-works/pi-coding-agent";
 import {
 	type TuiMouseEvent,
 	sliceByColumn,
@@ -161,4 +163,43 @@ export function highlightColumns(line: string, start: number, end: number): stri
 /** The OSC 52 sequence that puts `text` on the system clipboard. */
 export function osc52(text: string): string {
 	return `\x1b]52;c;${Buffer.from(text, "utf8").toString("base64")}\x07`;
+}
+
+/** How long a failed copy's message stays up; pi's fullscreen selection uses the same. */
+const COPY_ERROR_FLASH_MS = 5000;
+
+/** The part of a TUI a copy reports to: pi's fullscreen renderer has `flash`, the regular one has not. */
+interface CopyReporter {
+	flash?: (message: string, durationMs?: number) => void;
+}
+
+/**
+ * Put `text` on the system clipboard the way pi copies its own fullscreen
+ * selection: pi's `copyToClipboard` (the native clipboard or a platform tool,
+ * OSC 52 only where nothing better exists), then "Copied!" or the error in the
+ * renderer's flash, where it has one. Resolves to whether it copied; never
+ * rejects. `copy` is for tests.
+ */
+export async function copyToSystemClipboard(
+	tui: unknown,
+	text: string,
+	copy: (text: string) => Promise<void> = copyToClipboard,
+): Promise<boolean> {
+	if (!text) return false;
+	const flash = (tui as CopyReporter | undefined)?.flash;
+	const report = (message: string, durationMs?: number): void => {
+		try {
+			if (typeof flash === "function") flash.call(tui, message, durationMs);
+		} catch {
+			// A torn-down renderer cannot show the message; the copy stands.
+		}
+	};
+	try {
+		await copy(text);
+		report("Copied!");
+		return true;
+	} catch (error) {
+		report(error instanceof Error ? error.message : String(error), COPY_ERROR_FLASH_MS);
+		return false;
+	}
 }

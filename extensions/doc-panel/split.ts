@@ -21,6 +21,16 @@
  * extension learns of it: pi-tui's own viewport listener consumes every mouse
  * report before an extension's terminal input listener would see it.
  *
+ * In fullscreen the split also keeps pi's transcript selection inside the
+ * chat. pi treats any visible overlay as covering the transcript: while one is
+ * up it starts a selection in screen rows rather than in the transcript's
+ * content (tui-alt-screen.js, `handleSelectionMouseEvent`), and screen rows
+ * run the full width, through the panel. The panel never covers the chat, so
+ * around pi's `hasOverlay()` the split has the panel's overlay report itself
+ * invisible ({@link SplitOptions}`.maskPane`): another overlay still counts,
+ * the panel does not, and a drag in the transcript selects and copies the
+ * transcript's own columns. The panel selects its own text (panel.ts).
+ *
  * pi only swaps renderers when no overlay is open (`switchTuiMode`), so the
  * renderer this was installed on stays the one drawing until the panel goes.
  *
@@ -71,6 +81,14 @@ export interface SplitOptions {
 	 * editor answers only the click, so a press on it arrives here too.
 	 */
 	onChatPress?: () => void;
+	/**
+	 * Fullscreen only. Called with `true` right before pi's `hasOverlay()` runs
+	 * and `false` right after, synchronously; while masked, the panel's overlay
+	 * should say it is not visible (its `visible` option), so pi does not count
+	 * it as covering the chat. Never called around anything else, so the panel
+	 * still draws and takes the mouse.
+	 */
+	maskPane?: (masked: boolean) => void;
 }
 
 export interface ChatSplit {
@@ -81,7 +99,11 @@ export interface ChatSplit {
 }
 
 /** What the split reaches on the TUI beyond its public interface. */
-type SplitTui = TUI & { layoutRoot?: Component; setLayoutRoot?: (root: Component | undefined) => void };
+type SplitTui = TUI & {
+	layoutRoot?: Component;
+	setLayoutRoot?: (root: Component | undefined) => void;
+	hasOverlay?: () => boolean;
+};
 
 /** Clamp a reserve to [0, width - 1]; an error or a nonsense value means 0. */
 function safeReserve(reserve: Reserve, width: number): number {
@@ -172,18 +194,56 @@ function splitLayout(
 	if (typeof stackLayoutNode !== "function") return undefined;
 	const root = new SplitRoot(original, reserve, () => tui.terminal.columns, options.onChatPress);
 	tui.setLayoutRoot(root);
+	const unmask = options.maskPane ? maskHasOverlay(tui, options.maskPane) : undefined;
 	let removed = false;
 	const split: ChatSplit = {
 		kind: "layout",
 		remove: () => {
 			if (removed) return;
 			removed = true;
+			unmask?.();
 			// pi may have mounted another root meanwhile; that one is not ours to replace.
 			if (tui.layoutRoot === root) tui.setLayoutRoot?.(original);
 			if (tui[INSTALLED] === split) tui[INSTALLED] = undefined;
 		},
 	};
 	return split;
+}
+
+/**
+ * Wrap `tui.hasOverlay` on the instance so `mask` brackets every call (see the
+ * module header). Returns the undo; a TUI without the method is left alone.
+ */
+function maskHasOverlay(tui: SplitTui, mask: (masked: boolean) => void): (() => void) | undefined {
+	const prior = tui.hasOverlay;
+	if (typeof prior !== "function") return undefined;
+	const own = Object.prototype.hasOwnProperty.call(tui, "hasOverlay");
+	let active = true;
+	const wrapped = function (this: unknown): boolean {
+		if (!active) return prior.call(tui);
+		try {
+			mask(true);
+		} catch {
+			// A mask that fails leaves pi's answer as it was.
+		}
+		try {
+			return prior.call(tui);
+		} finally {
+			try {
+				mask(false);
+			} catch {
+				// As above.
+			}
+		}
+	};
+	tui.hasOverlay = wrapped;
+	return () => {
+		// Pass-through from here on even if the restore is shadowed.
+		active = false;
+		if (tui.hasOverlay !== wrapped) return;
+		if (own) tui.hasOverlay = prior;
+		else delete tui.hasOverlay;
+	};
 }
 
 function splitRender(tui: SplitTui & { [INSTALLED]?: ChatSplit }, reserve: Reserve): ChatSplit | undefined {
