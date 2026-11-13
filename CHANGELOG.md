@@ -6,6 +6,12 @@ format is stated once in AGENTS.md §2. Lanes write `changelog.d/<LANE>.md`
 
 ## Unreleased
 
+#### Mouse selection stays in the pane it starts in · 2026-11-13 18:13 · zkqmoyrs
+- Fullscreen: dragging in the doc panel now selects and copies only the current tab's text, never the chat beside it. The selection stays on its text while the panel scrolls, each tab keeps its own, and dragging past the top or bottom scrolls the panel.
+- Fullscreen: dragging in the chat while the doc panel is open selects only the chat's transcript again, the same way it does with the panel closed, instead of whole screen rows that ran on into the panel.
+- The subagent chat and the shared-notes view now sit beside the doc panel and narrow while it is shown, rather than being drawn over or under it. A drag in the subagent chat stays in its own columns.
+- Selections in the doc panel and the subagent chat are copied the way pi copies its own: the system clipboard, with "Copied!" (or the error) shown in fullscreen.
+
 #### Installs as a pi package · 2026-11-12 07:35 · oouzspwy
 - simply-pi is now a pi package: `pi install <path to this repo>` loads it, in place of the `~/.pi/agent/extensions/simply-pi` symlink. Nothing else changes for you; remove the old symlink when you install, or both would load.
 
